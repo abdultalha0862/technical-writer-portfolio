@@ -1,5 +1,5 @@
-import {themes as prismThemes} from 'prism-react-renderer';
-import type {Config} from '@docusaurus/types';
+import { themes as prismThemes } from 'prism-react-renderer';
+import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
@@ -14,11 +14,46 @@ const config: Config = {
 
   url: 'https://docs.abdultalha.dev',
   baseUrl: '/',
+  trailingSlash: false,
 
   organizationName: 'abdultalha0862',
   projectName: 'technical-writing-portfolio',
 
   onBrokenLinks: 'throw',
+
+  scripts: [
+    {
+      src: 'https://gc.zgo.at/count.js',
+      async: true,
+      'data-goatcounter': 'https://abdultalha.goatcounter.com/count',
+    },
+  ],
+
+  headTags: [
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'author',
+        content: 'Abdul Talha',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'description',
+        content:
+          'Production-ready DevOps documentation for self-hosted open-source software, Docker, Kubernetes, Linux, and cloud deployments.',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'keywords',
+        content:
+          'DevOps Technical Writer, Docker, Kubernetes, Self-Hosted, Open Source, Technical Documentation, Linux, Cloud',
+      },
+    },
+  ],
 
   i18n: {
     defaultLocale: 'en',
@@ -62,6 +97,17 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
 
+    metadata: [
+      {
+        name: 'linkedin',
+        content: 'https://linkedin.com/in/abdul-talha',
+      },
+      {
+        name: 'github',
+        content: 'https://github.com/abdultalha0862',
+      },
+    ],
+
     navbar: {
       title: 'Abdul Talha',
       items: [
@@ -86,7 +132,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'http://linkedin.com/in/abdul-talha/',
+          href: 'https://linkedin.com/in/abdul-talha',
           label: 'LinkedIn',
           position: 'right',
         },
@@ -96,7 +142,7 @@ const config: Config = {
           position: 'right',
         },
         {
-          href: 'https://freecodecamp.org/news/author/abdultalha3226/',
+          href: 'https://www.freecodecamp.org/news/author/abdultalha3226/',
           label: 'freeCodeCamp',
           position: 'right',
         },
@@ -145,7 +191,7 @@ const config: Config = {
             },
             {
               label: 'freeCodeCamp',
-              href: 'https://freecodecamp.org/news/author/abdultalha3226/',
+              href: 'https://www.freecodecamp.org/news/author/abdultalha3226/',
             },
           ],
         },
@@ -158,7 +204,7 @@ const config: Config = {
             },
             {
               label: 'LinkedIn',
-              href: 'http://linkedin.com/in/abdul-talha/',
+              href: 'https://linkedin.com/in/abdul-talha',
             },
             {
               label: 'Email',
