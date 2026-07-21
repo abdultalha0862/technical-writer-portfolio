@@ -12,10 +12,10 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://abdultalha.tech',
+  url: 'https://docs.abdultalha.dev',
   baseUrl: '/',
 
-  organizationName: 'abdultalha',
+  organizationName: 'abdultalha0862',
   projectName: 'technical-writing-portfolio',
 
   onBrokenLinks: 'throw',
