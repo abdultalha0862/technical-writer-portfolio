@@ -1,6 +1,6 @@
 # Abdul Talha — DevOps Documentation Portfolio
 
-[![Deploy to GitHub Pages](https://github.com/abdultalha0862/technical-writing-portfolio/actions/workflows/deploy.yml/badge.svg)](https://github.com/abdultalha0862/technical-writing-portfolio/actions/workflows/deploy.yml)
+
 
 Production-ready DevOps documentation for self-hosted open-source software, published at **[docs.abdultalha.dev](https://docs.abdultalha.dev)**.
 
