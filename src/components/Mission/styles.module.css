@@ -1,0 +1,144 @@
+.section {
+  padding-top: 2rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 1.5rem;
+  align-items: stretch;
+}
+
+.leftColumn {
+  display: grid;
+  gap: 1.5rem;
+  align-content: start;
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.featureCard {
+  height: 100%;
+}
+
+.featureBody {
+  height: 100%;
+}
+
+.featureHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  min-height: 2.9rem;
+}
+
+.iconPlaceholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--ifm-color-emphasis-100);
+  color: var(--ifm-color-primary);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--ifm-toc-border-color);
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.featureCard:hover .iconPlaceholder {
+  border-color: var(--ifm-color-primary-lighter);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.workflowPanel {
+  overflow: hidden;
+}
+
+.workflowTitle {
+  margin: 0;
+  color: var(--ifm-font-color-base);
+  font-size: clamp(1.25rem, 2vw, 1.75rem);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+
+.workflowTrack {
+  display: grid;
+  gap: 1.1rem;
+  margin-top: 1.25rem;
+}
+
+.workflowItem {
+  display: grid;
+  gap: 0.9rem;
+  justify-items: center;
+}
+
+.workflowCard {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  background: var(--ifm-background-surface-color);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.workflowIndex {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--ifm-color-emphasis-100);
+  color: var(--ifm-color-primary);
+  font-size: 0.76rem;
+  font-weight: 800;
+  border: 1px solid var(--ifm-toc-border-color);
+}
+
+.workflowLabel {
+  color: var(--ifm-font-color-base);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.workflowConnector {
+  width: 2px;
+  height: 1.25rem;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--ifm-color-primary), transparent);
+}
+
+@media (max-width: 996px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .featureGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .section {
+    padding-top: 1.5rem;
+  }
+}

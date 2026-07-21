@@ -1,0 +1,135 @@
+---
+sidebar_label: AI News Summariser
+sidebar_position: 3
+title: Build an AI News Summariser with Kestra and Gemini
+---
+
+# Build an AI News Summariser with Kestra and Gemini
+
+Keeping up with the latest news often means checking multiple websites or RSS feeds throughout the day. While RSS makes it easy to aggregate content from different sources, reading every new article and identifying the key takeaways is still a manual task.
+
+Kestra makes it straightforward to automate that process. In this tutorial, you'll build a workflow that fetches the latest articles from an RSS feed, sends them to a large language model (LLM) for summarisation, and generates a concise Markdown summary. The workflow can be extended to send summaries to email, Slack, or any downstream system that fits your automation needs.
+
+By the end of this tutorial, you'll have an automated workflow that runs on demand or on a schedule, making it easier to stay informed without manually reviewing every article.
+
+> Every step in this tutorial has been verified on a live Kestra server to ensure the workflow and configuration work exactly as described.
+
+## What is AI news summarisation?
+
+AI news summarisation combines content aggregation with large language models (LLMs) to automatically identify and summarise the most important information from multiple news sources. Instead of reading every article individually, an LLM can analyse the latest content and produce concise summaries that are easier to review and share.
+
+### The two stages: content retrieval and summarisation
+
+Every AI news summarisation workflow consists of two stages. The first stage retrieves the latest articles from an RSS feed or another content source. The second stage sends that content to an LLM, which extracts the key information and generates a concise summary.
+
+### Why scripts don't scale to production
+
+A simple Python script can fetch an RSS feed and summarise it with an LLM, but it only runs when you execute it manually. In production, you often want the workflow to run on a schedule, integrate with external services, handle transient failures, and keep a record of every execution. Those are orchestration concerns, and they're exactly what workflow engines like Kestra are designed to solve.
+
+## The AI news summarisation workflow we'll build
+
+The workflow is made up of two tasks. Kestra retrieves the latest articles from an RSS feed using an HTTP request. It then passes the feed to a large language model (LLM), which extracts the most recent articles and generates a concise Markdown summary.
+
+## Step 1: Fetching the latest articles
+
+The workflow begins by retrieving the latest articles from an RSS feed. Kestra's HTTP Request task sends a GET request to the RSS endpoint and returns the XML response, making it available to downstream tasks.
+
+```yaml
+- id: fetch_rss
+  type: io.kestra.plugin.core.http.Request
+  uri: https://kestra.io/rss.xml
+  method: GET
+  contentType: text/xml
+```
+
+The HTTP Request task is responsible for collecting the source content that the rest of the workflow depends on. The `contentType: text/xml` setting tells Kestra to request the feed as XML, which is the standard format used by RSS feeds. Once the request completes successfully, the response body becomes available to subsequent tasks using `outputs.fetch_rss.body`.
+
+## Step 2: Generating AI summaries
+
+Once the RSS feed has been retrieved, the next step is to generate a summary of the latest articles. The ChatCompletion task sends the RSS feed to a large language model (LLM), which analyses the content and produces a concise Markdown summary.
+
+```yaml
+- id: summarize_news
+  type: io.kestra.plugin.gemini.ChatCompletion
+  apiKey: "{{ secret('GEMINI_API_KEY') }}"
+  model: "gemini-2.5-flash"
+  retry:
+    type: constant
+    interval: PT10S
+    maxAttempt: 5
+  messages:
+    - type: SYSTEM
+      content: |
+        You are a tech editor. Read this XML RSS feed from a blog.
+        Write a short summary of the top 3 newest articles.
+        Make it a clean Markdown list.
+    - type: USER
+      content: "{{ outputs.fetch_rss.body }}"
+```
+
+The ChatCompletion task receives the XML response from the previous task using `outputs.fetch_rss.body`. The system message defines the role and expected output format, while the user message passes the RSS feed to the model for processing.
+
+Although this tutorial uses the Google Gemini plugin, the same workflow pattern can be adapted to other supported LLM providers by replacing the ChatCompletion task with the appropriate plugin. The overall workflow remains unchanged—only the provider-specific configuration needs to be updated.
+
+The complete configuration for the workflow includes the following YAML code:
+
+```yaml
+id: news_gemini_summarizer
+namespace: production
+
+tasks:
+  - id: fetch_rss
+    type: io.kestra.plugin.core.http.Request
+    uri: https://kestra.io/rss.xml
+    method: GET
+    contentType: text/xml
+
+  - id: summarize_news
+    type: io.kestra.plugin.gemini.ChatCompletion
+    apiKey: "{{ secret('GEMINI_API_KEY') }}"
+    model: "gemini-2.5-flash"
+    retry:
+      type: constant
+      interval: PT10S
+      maxAttempt: 5
+    messages:
+      - type: SYSTEM
+        content: You are a tech editor. Read this XML RSS feed from a blog. Write a short summary of the top 3 newest articles. Make it a clean Markdown list.
+      - type: USER
+        content: "{{ outputs.fetch_rss.body }}"
+```
+
+## Step 3: Running the workflow
+
+At this point, the workflow is ready to execute. Open the workflow in the Kestra UI and select **Execute** to start a new execution. Kestra first retrieves the RSS feed and then passes the response to the ChatCompletion task, which generates a concise Markdown summary of the latest articles.
+
+Once the execution completes, the generated summary is available in the task outputs and can be used directly or passed to downstream tasks such as Slack, email, or other automation workflows.
+
+## Step 4: Scheduling the workflow
+
+One of the biggest advantages of using a workflow orchestrator is that the workflow doesn't have to be triggered manually. Kestra can execute the workflow on a schedule, ensuring that the latest articles are retrieved and summarised automatically.
+
+The following trigger runs the workflow every day at 8:00 AM.
+
+```yaml
+triggers:
+  - id: daily_summary
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 8 * * *"
+```
+
+Once the trigger is added, Kestra automatically creates a new execution according to the defined schedule. Every execution is recorded in the execution history, making it easy to review previous runs, inspect logs, and troubleshoot failures if they occur.
+
+## Run it yourself
+
+You now have a workflow that automatically retrieves the latest articles from an RSS feed and generates AI-powered summaries using a large language model. While this tutorial uses the Kestra blog RSS feed and the Google Gemini plugin, the same workflow can be adapted to many different content sources and supported LLM providers.
+
+Once you're comfortable with the basics, try extending the workflow by:
+
+- Replacing the RSS feed with your preferred news source.
+- Switching to another supported LLM provider.
+- Delivering summaries to Slack, email, or Microsoft Teams.
+- Storing summaries in a database or knowledge base.
+- Combining this workflow with other Kestra workflows to build larger automation pipelines.
+
+From here, you can continue experimenting with additional plugins, triggers, and integrations to build more advanced AI-powered automation workflows.
