@@ -133,7 +133,7 @@ export default function CaseStudies(): JSX.Element {
                     </div>
 
                     <div className={styles.cardFooter}>
-                      <Link className="button button--secondary button--sm" to="/docs/intro">
+                      <Link className="button button--secondary button--sm" to="/docs">
                         Read More
                       </Link>
                     </div>
@@ -155,7 +155,7 @@ export default function CaseStudies(): JSX.Element {
             </article>
 
             <div className={styles.ctaRow}>
-              <Link className="button button--primary button--lg" to="/docs/intro">
+              <Link className="button button--primary button--lg" to="/docs">
                 View Complete Documentation
               </Link>
             </div>

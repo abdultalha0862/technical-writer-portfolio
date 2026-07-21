@@ -114,7 +114,7 @@ export default function OpenSourcePage(): JSX.Element {
 
             <div className={styles.grid}>
               {projects.map((project, index) => (
-                <Link key={`${project.title}-${index}`} to="/docs/intro" className={styles.cardLink} aria-label={project.title}>
+                <Link key={`${project.title}-${index}`} to="/docs" className={styles.cardLink} aria-label={project.title}>
                   <article className={styles.card}>
                     <div className={styles.cardBody}>
                       <div className={styles.cardTop}>
@@ -177,7 +177,7 @@ export default function OpenSourcePage(): JSX.Element {
             </section>
 
             <div className={styles.ctaRow}>
-              <Link className="button button--primary button--lg" to="/docs/intro">
+              <Link className="button button--primary button--lg" to="/docs">
                 View Open Source Contributions
               </Link>
             </div>
