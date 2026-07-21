@@ -58,3 +58,35 @@
   --ifm-color-primary-lightest: #4fddbf;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
 }
+
+/* ---------------------------------------------------------------------------
+   Responsive safeguards (apply site-wide)
+   --------------------------------------------------------------------------- */
+
+/* Keep font sizes stable when rotating iOS devices */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Media never forces horizontal scroll on small screens */
+.main-wrapper img,
+.main-wrapper video,
+.theme-doc-markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Long words, URLs, and inline code wrap instead of overflowing on mobile */
+.theme-doc-markdown {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Wide tables scroll horizontally rather than overflowing the viewport */
+@media (max-width: 996px) {
+  .theme-doc-markdown table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+  }
+}

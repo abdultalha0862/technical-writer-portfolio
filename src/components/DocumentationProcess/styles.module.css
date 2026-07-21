@@ -68,6 +68,12 @@
   background: linear-gradient(90deg, var(--ifm-color-primary-light), var(--ifm-color-emphasis-500));
 }
 
+@media (max-width: 1200px) {
+  .timeline {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 996px) {
   .timeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));

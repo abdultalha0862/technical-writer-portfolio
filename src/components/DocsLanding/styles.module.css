@@ -457,6 +457,12 @@
   transform: translateY(-50%) rotate(-45deg);
 }
 
+@media (max-width: 1200px) {
+  .publicationGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 996px) {
   .section {
     padding: 3rem 0;
