@@ -20,7 +20,7 @@ const docs = [
     summary: 'Self-hosted kanban board for project collaboration, deployed with Docker Compose and a PostgreSQL backend.',
     tags: ['Docker', 'PostgreSQL', 'Kanban'],
     type: 'Tutorial',
-    href: 'https://example.com/planka-placeholder',
+    href: 'https://docs.vultr.com/how-to-deploy-planka-open-source-project-management-tool',
   },
   {
     publishedOn: 'Published Portfolio Docs',

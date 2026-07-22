@@ -47,7 +47,7 @@ const recentlyUpdated = [
     date: 'Jul 2026',
     title: 'Deploy Planka',
     publishedOn: 'Published on Vultr',
-    to: '/docs/applications/planka/deploy',
+    to: 'https://docs.vultr.com/how-to-deploy-planka-open-source-project-management-tool',
   },
   {
     date: 'Jul 2026',
