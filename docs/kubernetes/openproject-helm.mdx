@@ -6,6 +6,704 @@ title: Deploy OpenProject on Kubernetes Using Helm Charts
 
 # Deploy OpenProject on Kubernetes Using Helm Charts
 
-Deploy OpenProject on Kubernetes using Helm, configure persistent storage, networking, and production-ready settings.
+OpenProject is an open-source project management platform that helps teams plan projects, manage tasks, track progress, and collaborate using features such as Agile boards, Gantt charts, time tracking, and document management. It gives you a self-hosted alternative to paid project management tools. This gives your organisation full ownership of its data while letting you customise the platform to fit your needs.
 
-*A production-ready guide is being prepared.*
+While you can deploy OpenProject on a single server using Docker Compose, real-world setups often need to stay online, handle more traffic, and run reliably. Running OpenProject on Kubernetes shares the work across multiple servers, makes updates easier, and recovers automatically if something breaks.
+
+In this tutorial, you will deploy OpenProject on a Civo Kubernetes cluster using the official Helm chart. The setup uses a Civo Managed PostgreSQL database for safe storage, Civo Object Storage for file attachments, the NGINX Ingress Controller for outside access, and cert-manager with Let's Encrypt to automatically create TLS certificates. This gives you a secure, ready-to-use setup that can grow with you.
+
+## Why Self-Host OpenProject on Kubernetes
+
+A few reasons teams choose this approach:
+
+- **You control your data:** Projects, tasks, documents, attachments, and team information stay on your own servers instead of storing them on another company's platform.
+- **Lower long-term costs:** Self-hosting OpenProject can be cheaper than paying monthly fees, especially for organizations with many projects and large teams.
+- **Built for real-world use:** Kubernetes makes the app more reliable by sharing the work across multiple servers, fixing broken parts automatically, and making updates easier without taking the system offline.
+- **Grows with you:** As your team grows, Kubernetes lets you add more power without making big changes to your setup.
+- **Flexible connections:** Using managed services like Civo Managed PostgreSQL and Civo Object Storage lets you keep the app separate from the data. This makes backups, updates, and general upkeep much easier.
+
+## Prerequisites
+
+Before getting started, make sure you have the following:
+
+- A Civo account with the Civo CLI installed and authenticated.
+- kubectl installed and configured.
+- Helm installed on your local machine.
+- A Civo Managed PostgreSQL Database
+- A Civo Managed Object Storage
+- A domain name that you control, with permission to create DNS records. If you do not have a domain name, you can use `nip.io`. This is a free wildcard DNS service that automatically points an IP address to a hostname, letting you access your setup without doing manual DNS work.
+
+## Create a Civo Kubernetes Cluster
+
+Create a Civo Kubernetes cluster to host the OpenProject deployment. Use a three-node K3s cluster with the Cilium CNI plugin. This step removes the default Traefik ingress controller because you will install the NGINX Ingress Controller later in the tutorial.
+
+Create the cluster using the following command:
+
+```bash
+civo kubernetes create <CLUSTER_NAME> \
+  --nodes 3 \
+  --size g4s.kube.medium \
+  --cni-plugin cilium \
+  --remove-applications traefik2-nodeport \
+  --save \
+  --switch \
+  --wait
+```
+
+Replace:
+
+- `<CLUSTER_NAME>` with the name of your Kubernetes cluster.
+
+After you create the cluster, verify that all nodes show a Ready state:
+
+```bash
+kubectl get nodes
+```
+
+Expected output:
+
+```text
+NAME                                      STATUS   ROLES    AGE   VERSION
+k3s-xxxxxxxxxxxxxxxx-default-pool-xxxxx   Ready    <none>   2m    v1.35.x+k3s1
+k3s-xxxxxxxxxxxxxxxx-default-pool-xxxxx   Ready    <none>   2m    v1.35.x+k3s1
+k3s-xxxxxxxxxxxxxxxx-default-pool-xxxxx   Ready    <none>   2m    v1.35.x+k3s1
+```
+
+Next, verify that the system pods run successfully:
+
+```bash
+kubectl get pods -A
+```
+
+## Install the NGINX Ingress Controller
+
+The NGINX Ingress Controller lets outside traffic reach OpenProject by sending HTTP and HTTPS requests to the app running inside the Kubernetes cluster. Since you removed the default Traefik ingress controller when creating the cluster, install `ingress-nginx` instead.
+
+Add the NGINX Helm repository:
+
+```bash
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+```
+
+Update your local Helm repositories:
+
+```bash
+helm repo update
+```
+
+Install the NGINX Ingress Controller:
+
+```bash
+helm upgrade --install ingress-nginx \
+  ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.replicaCount=2 \
+  --wait
+```
+
+Verify that the NGINX Ingress Controller pods run:
+
+```bash
+kubectl get pods -n ingress-nginx
+```
+
+Expected output:
+
+```text
+NAME                                        READY   STATUS    RESTARTS   AGE
+ingress-nginx-controller-xxxxxxxxxx-xxxxx   1/1     Running   0          1m
+ingress-nginx-controller-xxxxxxxxxx-xxxxx   1/1     Running   0          1m
+```
+
+Next, verify that the system created the LoadBalancer service:
+
+```bash
+kubectl get svc -n ingress-nginx
+```
+
+Expected output:
+
+```text
+NAME                       TYPE           EXTERNAL-IP     PORT(S)
+ingress-nginx-controller   LoadBalancer   <EXTERNAL_IP>   80:xxxxx/TCP,443:xxxxx/TCP
+```
+
+You will use this external IP later when setting up DNS for OpenProject.
+
+## Install cert-manager
+
+The cert-manager automatically creates and updates TLS certificates for Kubernetes apps. Install it first, and then set up a ClusterIssuer that asks Let's Encrypt for certificates.
+
+Add the Jetstack Helm repository:
+
+```bash
+helm repo add jetstack https://charts.jetstack.io
+```
+
+Update your local Helm repositories:
+
+```bash
+helm repo update
+```
+
+Install cert-manager:
+
+```bash
+helm upgrade --install cert-manager \
+ jetstack/cert-manager \
+ --namespace cert-manager \
+ --create-namespace \
+ --set crds.enabled=true \
+ --wait
+```
+
+Verify that the cert-manager pods run:
+
+```bash
+kubectl get pods -n cert-manager
+```
+
+Expected output:
+
+```text
+NAME                                       READY   STATUS    RESTARTS   AGE
+cert-manager-xxxxxxxxxx-xxxxx              1/1     Running   0          1m
+cert-manager-cainjector-xxxxxxxxxx-xxxxx   1/1     Running   0          1m
+cert-manager-webhook-xxxxxxxxxx-xxxxx      1/1     Running   0          1m
+```
+
+Next, verify that the system installed the `cert-manager` Custom Resource Definitions (CRDs) successfully:
+
+```bash
+kubectl get crds | grep cert-manager
+```
+
+Once the cert-manager parts run, you can set up a ClusterIssuer to automatically ask Let's Encrypt for TLS certificates.
+
+## Configure a ClusterIssuer
+
+The ClusterIssuer tells cert-manager how to ask for TLS certificates. You will set it up to use Let's Encrypt with the HTTP-01 challenge through the NGINX Ingress Controller.
+
+Create a file named clusterissuer.yaml:
+
+```bash
+nano clusterissuer.yaml
+```
+
+Add the following setup:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: <YOUR_EMAIL_ADDRESS>
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+```
+
+Replace:
+
+- `<YOUR_EMAIL_ADDRESS>` with your email address.
+
+Apply the file:
+
+```bash
+kubectl apply -f clusterissuer.yaml
+```
+
+Verify that the system created the ClusterIssuer successfully:
+
+```bash
+kubectl get clusterissuer
+```
+
+Expected output:
+
+```text
+NAME               READY   AGE
+letsencrypt-prod   True    5s
+```
+
+Once the ClusterIssuer shows a Ready status, you can deploy OpenProject resources that need automatic TLS certificates.
+## Create the OpenProject Namespace and Secrets
+
+To keep the setup organised, create a dedicated namespace for the OpenProject parts. Also, create Kubernetes Secrets to safely store the PostgreSQL password and Object Storage keys instead of writing them directly in the Helm settings file.
+
+Create the OpenProject namespace:
+
+```bash
+kubectl create namespace openproject
+```
+
+Next, create a secret to store the PostgreSQL password:
+
+```bash
+kubectl create secret generic openproject-postgresql \
+ -n openproject \
+ --from-literal=password='<YOUR_POSTGRESQL_PASSWORD>'
+```
+
+Replace:
+
+- `<YOUR_POSTGRESQL_PASSWORD>` with your PostgreSQL user password.
+
+Next, create a secret for the Object Storage keys:
+
+```bash
+kubectl create secret generic openproject-s3-credentials \
+ -n openproject \
+ --from-literal=OPENPROJECT_FOG_CREDENTIALS_AWS__ACCESS__KEY__ID='<YOUR_ACCESS_KEY>' \
+ --from-literal=OPENPROJECT_FOG_CREDENTIALS_AWS__SECRET__ACCESS__KEY='<YOUR_SECRET_KEY>'
+```
+
+Replace:
+
+- `<YOUR_ACCESS_KEY>` with your Object Storage access key.
+- `<YOUR_SECRET_KEY>` with your Object Storage secret key.
+
+Verify that the system created both secrets successfully:
+
+```bash
+kubectl get secrets -n openproject
+```
+
+Expected output:
+
+```text
+NAME                         TYPE     DATA   AGE
+openproject-postgresql       Opaque   1      30s
+openproject-s3-credentials   Opaque   2      15s
+```
+
+With the namespace and secrets ready, you can point OpenProject to the managed PostgreSQL database and Object Storage.
+
+## Configure Managed PostgreSQL and Object Storage
+
+OpenProject saves project data in a PostgreSQL database and uses object storage for file attachments. In this tutorial, you will use a Civo Managed PostgreSQL database and Civo Object Storage instead of running these tools inside the Kubernetes cluster.
+
+First, connect to your PostgreSQL instance:
+
+```bash
+psql -h <POSTGRES_HOST> -U <POSTGRES_USER> -d postgres
+```
+
+Replace:
+
+- `<POSTGRES_HOST>` with the hostname or IP address of your managed PostgreSQL instance.
+- `<POSTGRES_USER>` with your PostgreSQL username.
+
+Create a database for OpenProject:
+
+```sql
+CREATE DATABASE openproject;
+```
+
+Connect to the new database:
+
+```sql
+\c openproject
+```
+
+After you create the database, you are ready to point OpenProject to both the managed PostgreSQL database and Civo Object Storage.
+
+## Configure the Helm Values
+
+The OpenProject Helm chart comes with default settings that you can change for your setup. Create a custom `values.yaml` file to set up the ingress, managed PostgreSQL database, Object Storage, and other choices.
+
+First, add the OpenProject Helm repository:
+
+```bash
+helm repo add openproject https://charts.openproject.org
+```
+
+Update your local Helm repositories:
+
+```bash
+helm repo update
+```
+
+Download the default Helm values:
+
+```bash
+helm show values openproject/openproject > default-values.yaml
+```
+
+Next, create a file named values.yaml:
+
+```bash
+nano values.yaml
+```
+
+Add the following setup:
+
+```yaml
+# OpenProject
+develop: false
+# Ingress
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: openproject.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: openproject-tls
+
+# OpenProject
+openproject:
+  https: true
+  host: openproject.example.com
+  hsts: true
+  cache:
+    store: memcache
+# Replicas
+replicaCount: 1
+backgroundReplicaCount: 1
+
+
+# Workers
+
+workers:
+  default:
+    replicaCount: 1
+
+    strategy:
+      type: Recreate
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+# Hocuspocus
+
+hocuspocus:
+  enabled: true
+  ingress:
+    path: /hocuspocus
+    pathType: Prefix
+  auth:
+    existingSecret: ""
+    secretKey: secret
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# PostgreSQL
+
+postgresql:
+  bundled: false
+  connection:
+    host: <POSTGRES_HOST>
+    port: <POSTGRES_PORT> 
+  auth:
+    username: civo
+    database: openproject
+    existingSecret: openproject-postgresql
+    secretKeys:
+      userPasswordKey: password
+
+  options:
+    sslmode: require
+
+# Memcached
+
+memcached:
+  bundled: true
+
+# Persistence
+
+persistence:
+  enabled: false
+
+# S3
+
+s3:
+  enabled: true
+  auth:
+    existingSecret: openproject-s3-credentials
+  region: NYC1
+  bucketName: openproject
+  endpoint: https://objectstore.nyc1.civo.com
+  host: objectstore.nyc1.civo.com
+  port: 443
+  pathStyle: true
+  signatureVersion: 4
+  enableSignatureV4Streaming: true
+  directUploads: true
+
+###############################################################################
+# Resources
+###############################################################################
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+###############################################################################
+# Autoscaling
+###############################################################################
+
+autoscaling:
+  enabled: false
+
+###############################################################################
+# Metrics
+###############################################################################
+
+metrics:
+  enabled: false
+
+###############################################################################
+# Service
+###############################################################################
+
+service:
+  enabled: true
+  type: ClusterIP
+
+###############################################################################
+# Security
+###############################################################################
+
+podSecurityContext:
+  enabled: true
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+
+###############################################################################
+# Scheduling
+###############################################################################
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+```
+
+Replace:
+
+- `<YOUR_DOMAIN>` with your domain name.
+- `<POSTGRES_HOST>` with your Managed PostgreSQL host.
+- `<POSTGRES_USERNAME>` with your PostgreSQL username.
+- `<OBJECT_STORAGE_BUCKET>` with your Object Storage bucket name.
+- `<OBJECT_STORAGE_ENDPOINT>` with your Object Storage endpoint.
+- `<OBJECT_STORAGE_REGION>` with your Object Storage region.
+- `<POSTGRESQL_SECRET_NAME>` with your Kubernetes secret containing the PostgreSQL password.
+- `<S3_SECRET_NAME>` with your Kubernetes secret containing the Object Storage keys.
+
+After saving the file, test the Helm chart by building the Kubernetes files locally:
+
+```bash
+helm template openproject \
+ openproject/openproject \
+ --namespace openproject \
+ --values values.yaml > rendered.yaml
+```
+
+If the command finishes successfully, you are ready to deploy OpenProject using your custom Helm settings.
+
+## Deploy OpenProject with Helm
+
+Now that you have configured the Helm values, you can deploy OpenProject to the Kubernetes cluster using the official Helm chart.
+
+Deploy OpenProject using the following command:
+
+```bash
+helm upgrade --install openproject \
+ openproject/openproject \
+ --namespace openproject \
+ --values values.yaml \
+ --wait \
+ --timeout 20m
+```
+
+Wait for the deployment to finish. Depending on your cluster and internet connection, this may take a few minutes while Kubernetes creates the required parts and starts the app.
+
+Verify that the OpenProject pods run:
+
+```bash
+kubectl get pods -n openproject
+```
+
+Expected output:
+
+Next, verify that the database jobs finished successfully:
+
+```bash
+kubectl get jobs -n openproject
+```
+
+Expected output:
+
+```text
+NAME                        COMPLETIONS   DURATION   AGE
+openproject-seed-job        1/1           35s        2m
+openproject-migration-job   1/1           48s        2m
+```
+
+Once all pods run and the database jobs finish successfully, you are ready to set up DNS and HTTPS for OpenProject.
+
+## Configure DNS and HTTPS
+
+To reach OpenProject using your custom domain, point your domain to the external IP address of the NGINX Ingress Controller. Once the DNS record updates across the internet, `cert-manager` automatically asks Let's Encrypt for a TLS certificate.
+
+Create an A record in your DNS provider that points your domain to the external IP address of the NGINX Ingress Controller.
+
+Once the DNS record updates across the internet, verify that the system issued the TLS certificate successfully:
+
+```bash
+kubectl get certificate -n openproject
+```
+
+Expected output:
+
+```text
+NAME              READY   SECRET            AGE
+openproject-tls   True    openproject-tls   2m
+```
+
+Next, verify that the system created the Ingress resource successfully:
+
+```bash
+kubectl get ingress -n openproject
+```
+
+Expected output:
+
+```text
+NAME          CLASS   HOSTS                     ADDRESS         PORTS     AGE
+openproject   nginx   openproject.example.com   <EXTERNAL_IP>   80,443    2m
+```
+
+Replace:
+
+- `openproject.example.com` with your domain name.
+
+Once the certificate shows a Ready status and the Ingress gets an external IP address, you can securely open OpenProject.
+
+## Verify the Deployment
+
+Now that OpenProject is available through your custom domain, verify that all parts run successfully.
+
+First, check that all pods run:
+
+```bash
+kubectl get pods -n openproject
+```
+
+Expected output:
+
+```text
+NAME                                       READY   STATUS    RESTARTS   AGE
+openproject-web-xxxxxxxxxx-xxxxx           1/1     Running   0          5m
+openproject-worker-xxxxxxxxxx-xxxxx        1/1     Running   0          5m
+memcached-xxxxxxxxxx-xxxxx                 1/1     Running   0          5m
+```
+
+Next, verify that the database jobs finished successfully:
+
+```bash
+kubectl get jobs -n openproject
+```
+
+Expected output:
+
+```text
+NAME                        COMPLETIONS   DURATION   AGE
+openproject-seed-job        1/1           35s        5m
+openproject-migration-job   1/1           48s        5m
+```
+
+Next, verify that the system issued the TLS certificate successfully:
+
+```bash
+kubectl get certificate -n openproject
+```
+
+Expected output:
+
+```text
+NAME              READY   SECRET            AGE
+openproject-tls   True    openproject-tls   5m
+```
+
+Finally, open your web browser and go to your OpenProject instance:
+
+```text
+https://openproject.yourdomain.com
+```
+
+Replace:
+
+- `openproject.yourdomain.com` with your domain name.
+
+You should see the OpenProject login page. Sign in using your administrator account and create a test project to make sure the app works and saves project data and file attachments.
+
+You have successfully deployed OpenProject on a Civo Kubernetes cluster using the official Helm chart, Civo Managed PostgreSQL, Civo Object Storage, the NGINX Ingress Controller, and automatic TLS certificates from Let's Encrypt.
+
+## Clean up Resources
+
+If you followed along just to test and do not want to keep OpenProject running, delete your resources to avoid unwanted charges.
+
+First, delete the OpenProject Helm release:
+
+```bash
+helm uninstall openproject -n openproject
+```
+
+Delete the OpenProject namespace:
+
+```bash
+kubectl delete namespace openproject
+```
+
+If you no longer need the NGINX Ingress Controller, remove it from the cluster:
+
+```bash
+helm uninstall ingress-nginx -n ingress-nginx
+```
+
+You can also remove cert-manager if you do not need it anymore:
+
+```bash
+helm uninstall cert-manager -n cert-manager
+```
+
+Finally, delete the Civo Kubernetes cluster, Managed PostgreSQL database, and Object Storage bucket from your Civo account if you no longer need them.
+
+## Conclusion
+
+In this tutorial, you deployed OpenProject on a Civo Kubernetes cluster using the official Helm chart. You set up a Civo Managed PostgreSQL database for safe storage, connected Civo Object Storage for file attachments, installed the NGINX Ingress Controller, and secured the setup with automatic TLS certificates from Let's Encrypt.
+
+By running OpenProject on Kubernetes, you get a more reliable system that handles traffic better and is easier to maintain compared to a single-server setup. This architecture gives organizations a strong foundation to self-host an open-source project management platform while keeping full control over their data and servers.
