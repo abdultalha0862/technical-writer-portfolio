@@ -25,11 +25,11 @@ const contactCards = [
   },
   {
     label: 'GitHub',
-    value: 'github.com/abdultalha',
+    value: 'github.com/abdultalha0862',
     description:
       'Explore my open-source contributions, documentation source, and personal projects.',
     linkLabel: 'View GitHub',
-    to: 'https://github.com/abdultalha',
+    to: 'https://github.com/abdultalha0862',
   },
 ];
 
