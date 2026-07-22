@@ -1,9 +1,195 @@
 ---
 sidebar_label: Upgrade
 sidebar_position: 7
-title: Upgrade a Self-Hosted Docmost Instance
+title: How to Upgrade a Self-Hosted Docmost Instance
 ---
 
-# Upgrade a Self-Hosted Docmost Instance
+# How to Upgrade a Self-Hosted Docmost Instance
 
-*A production-ready guide is being prepared.*
+## Introduction
+
+Keeping your Docmost instance up to date ensures you receive the latest security fixes, bug fixes, performance improvements, and new features. Before upgrading, make sure you have a recent backup of your deployment, including the database, uploaded files, and configuration. If you haven't created one yet, follow the **How to Back Up and Restore a Self-Hosted Docmost Deployment** guide before proceeding.
+
+In this article, you'll upgrade a self-hosted Docmost instance from `v0.80.2` to `v0.95.0` using Docker Compose. You'll verify the current deployment, review the release notes, update the container image, complete the upgrade, and confirm that your pages, spaces, and uploaded files are preserved after the update. This guide walks through one specific version pair as a worked example, but the same workflow applies to any supported upgrade once you've reviewed the relevant release notes.
+
+Note: This article was tested on a live server before publication. Every command and verification step was validated on the final deployment to maintain accuracy.
+
+## Prerequisites
+
+Before you begin, make sure you have the following:
+
+**A Running Docmost Deployment**: A self-hosted Docmost instance deployed with Docker Compose.
+
+**A Non-Root User with Sudo Privileges**: SSH or terminal access to the server using the non-root user created during deployment.
+
+**Docker Engine and Docker Compose**: Installed on your server to manage the deployment.
+
+**A Recent Backup**: A current backup of your Docmost database, uploaded files, and configuration, created before you begin the upgrade.
+
+**Familiarity with Docker Compose**: Basic comfort editing a `docker-compose.yml` file and running Docker Compose commands.
+
+## Step 1: Verify the Current Deployment
+
+Verifying your current deployment before making any changes gives you a baseline you can compare against once the upgrade is complete. In this step, you'll confirm that all containers are running and record the current Docmost image version.
+
+Run the following commands:
+
+```bash
+docker compose ps
+docker compose images
+docker image inspect docmost/docmost:0.80.2 --format='{{.RepoTags}}'
+```
+
+The output should show that the Docmost container is running and using the `0.80.2` image, along with the Redis and Traefik containers.
+
+## Step 2: Review the Release Notes
+
+Reviewing the release notes for the target version helps you identify any breaking changes, new configuration requirements, deprecated features, or manual migration steps that could affect your deployment.
+
+For this guide, the Docmost instance is upgraded from `v0.80.2` to `v0.95.0`. The `v0.95.0` release notes describe a handful of quality-of-life additions — a workspace-level default edit preference, a `/time` slash command in the editor, and translation-aware search for slash-menu suggestions — along with several security fixes, but no breaking changes or manual migration steps.
+
+Once you've reviewed the release notes for your own upgrade path and confirmed there are no additional requirements, you're ready to update the Docker Compose configuration with the new Docmost image.
+
+## Step 3: Update the Docker Compose Configuration
+
+With the release notes reviewed, update your Docker Compose configuration to point to the new Docmost image.
+
+Open the `docker-compose.yml` file in your preferred text editor:
+
+```bash
+nano docker-compose.yml
+```
+
+Locate the `docmost` service and update the image from:
+
+```yaml
+image: docmost/docmost:0.80.2
+```
+
+to:
+
+```yaml
+image: docmost/docmost:0.95.0
+```
+
+Save the file, then verify that the image tag has been updated successfully:
+
+```bash
+grep "image:" docker-compose.yml
+```
+
+The output should show that the Docmost service is using the `docmost/docmost:0.95.0` image, while the Traefik and Redis images remain unchanged.
+
+## Step 4: Pull the Latest Docmost Image
+
+After updating the image tag, pull the new Docmost image from Docker Hub before starting the upgrade.
+
+```bash
+docker compose pull
+```
+
+Docker Compose downloads the updated image while leaving the existing containers running. This ensures the new image is available locally before the upgrade begins, and avoids downtime caused by image downloads during deployment.
+
+After the command completes, verify that the `docmost/docmost:0.95.0` image has been downloaded successfully before proceeding to the upgrade.
+
+## Step 5: Upgrade the Docmost Instance
+
+With the latest image downloaded, recreate the Docmost container using the updated image.
+
+```bash
+docker compose up -d
+```
+
+Docker Compose stops the existing Docmost container and creates a new one from the `0.95.0` image. The existing Docker volumes are reused, so your uploaded files and persistent data remain intact throughout the upgrade.
+
+After the deployment completes, verify that all containers are running and confirm that the Docmost service is using the new image:
+
+```bash
+docker compose ps
+```
+
+The output should show the Docmost container running with the `0.95.0` image, while the Redis and Traefik containers continue running normally.
+
+## Step 6: Verify the Upgrade
+
+After the containers have been recreated, review the application logs to confirm that Docmost started successfully and completed any required database migrations.
+
+```bash
+docker compose logs -f docmost
+```
+
+A successful startup should include log messages indicating that:
+
+- The Redis connection was established.
+- The database connection was successful.
+- Any pending database migrations were applied successfully.
+- The Nest application started successfully and is listening for incoming requests.
+
+Once you see these messages, press Ctrl+C to stop following the logs. At this point, the upgrade is complete and the application is ready for validation.
+
+## Step 7: Validate the Upgraded Instance
+
+With the upgrade complete and confirmed through the logs, validate that the application itself is working correctly for end users.
+
+Open your Docmost instance in a web browser and check the following:
+
+- Sign in to your Docmost workspace.
+- Verify that all spaces are present.
+- Open several pages to confirm their content is intact.
+- Confirm that uploaded files and attachments are accessible.
+- Create a new page and save your changes.
+- Upload a new file to verify that file uploads are working correctly.
+
+If all of these checks pass, your existing pages, spaces, and uploaded files have been preserved, and the upgraded instance is operating normally.
+
+## Troubleshooting
+
+**The Updated Image Fails to Pull**: If the image tag is incorrect or the version hasn't been published yet, `docker compose pull` will return an error similar to the following:
+
+```
+Error response from daemon: manifest for docmost/docmost:0.95.0 not found: manifest unknown
+```
+
+**Fix**: Confirm the exact version tag on the official Docmost GitHub releases page, correct the tag in `docker-compose.yml`, and run `docker compose pull` again.
+
+**The Docmost Container Restarts Repeatedly After the Upgrade**: If `docker compose ps` shows the container cycling through a restart loop instead of reaching an `Up` state, the new version may be failing to start.
+
+**Fix**: Review the container logs for the specific error:
+
+```bash
+docker compose logs docmost
+```
+
+Check the release notes again for any configuration changes you may have missed, and confirm your `.env` file still contains every variable the new version requires.
+
+**A Database Migration Fails During Startup**: If the logs show a migration error rather than a successful startup message, the upgrade should be rolled back rather than retried in place.
+
+**Fix**: Stop the deployment, then revert the image tag in `docker-compose.yml` to the previous version:
+
+```bash
+docker compose down
+```
+
+Start the deployment again on the previous version:
+
+```bash
+docker compose up -d
+```
+
+Once the previous version is confirmed working, restore your database from the backup taken before the upgrade if needed, and investigate the migration failure before attempting the upgrade a second time.
+
+## Further Steps
+
+Your Docmost instance is now running the latest version. Depending on your requirements, you may want to test upgrades on a staging environment before applying them to production, and keep an eye on new releases so you don't miss important security fixes.
+
+For the full release history and changelogs, refer to the official Docmost GitHub releases page:
+
+https://github.com/docmost/docmost/releases
+
+## Conclusion
+
+In this article, you upgraded a self-hosted Docmost instance from `v0.80.2` to `v0.95.0` using Docker Compose. You verified the existing deployment, reviewed the release notes, updated the container image, pulled the latest image, upgraded the application, verified the startup logs, and confirmed that your pages, spaces, and uploaded files were preserved after the upgrade.
+
+Following a structured upgrade workflow helps minimise downtime and reduces the risk of unexpected issues. Before upgrading future releases, review the release notes, create a recent backup, and validate the application afterward to keep your instance running reliably.
+
+

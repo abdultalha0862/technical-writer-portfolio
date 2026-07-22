@@ -6,4 +6,451 @@ title: Deploy Docmost with Docker Compose, Traefik, and External PostgreSQL
 
 # Deploy Docmost with Docker Compose, Traefik, and External PostgreSQL
 
-*A production-ready deployment guide is being prepared.*
+## Introduction
+
+[Docmost](https://docmost.com/) is a free, open-source wiki and documentation platform. It works as a fast, simple alternative to tools like Notion or Confluence, letting teams build and share knowledge right on their own servers. With real-time page editing, easy permissions, and file sharing, it acts as a single home for all your team's guides, manuals, and notes.
+
+Self-hosting gives you complete control over your data. You do not have to trust an outside company with your private information because everything lives on your own system. This keeps your work safe, protects your privacy, and saves money on monthly fees. It also gives you the freedom to run the app your way, choose who can see your files, and grow the setup as your team gets bigger.
+
+In this article, we will set up Docmost using a safe and reliable production layout. We will use Docker Compose to run the application easily and Traefik to handle web traffic with automatic, free SSL certificates. We will connect Docmost to an external PostgreSQL database to separate application and database workloads while simplifying backups and recovery.
+
+> **Note:** This article was tested on a live server before publication. Every command, configuration file, and verification step was validated on the final deployment to maintain accuracy.
+
+## Prerequisites
+
+Before you begin, make sure you have these four things ready:
+
+*   **A Cloud Server:** A Linux server with at least 2 vCPUs and 4 GB of RAM so the app runs smoothly.
+    
+*   **Docker and Docker Compose:** Installed on your server to run the application containers.
+    
+*   **A Domain Name:** A custom web address with an **A Record** pointing to your server's public IP address.
+    
+*   **External PostgreSQL:** A managed cloud database with your secure connection string ready to use.
+    
+
+## Architecture Diagram
+
+![Docmost production architecture diagram](/image.png)
+
+## Create a Non-Root Administrative User
+
+Many cloud providers provide root access by default. While this is convenient for initial setup, production deployments are generally managed through a non-root user with sudo privileges. This follows Linux security best practices and reduces the risk of accidental system-wide changes.
+
+1.  Create a new user:
+    
+    ```shell
+    adduser USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with your preferred username.
+        
+2.  Grant the user sudo privileges:
+    
+    ```shell
+    usermod -aG sudo USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+3.  Verify that the user has sudo access:
+    
+    ```shell
+    groups USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+4.  You should see output similar to:
+    
+    ```plaintext
+    USERNAME : USERNAME sudo
+    ```
+    
+5.  Switch to the new user:
+    
+    ```shell
+    su - USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+6.  Verify sudo access:
+    
+    ```shell
+    sudo whoami
+    ```
+    
+    You should see output similar to:
+    
+    ```plaintext
+    root
+    ```
+    
+7.  Allow the user to manage Docker without using the root account:
+    
+    ```shell
+    sudo usermod -aG docker USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+8.  Apply the new Docker group to the current session:
+    
+    ```shell
+    newgrp docker
+    ```
+    
+
+## Step 1: Create the Project Directory and Environment Variables
+
+Docmost uses environment variables to store application settings, database credentials, Redis connection details, and domain configuration. In this step, you'll create a dedicated project directory and define the variables used throughout the deployment.
+
+1.  Create the project directory and navigate to it.
+    
+    ```bash
+    mkdir ~/docmost
+    cd ~/docmost
+    ```
+    
+    This directory will contain all files related to the deployment, including the Docker Compose manifest and environment configuration.
+    
+2.  Generate a secure secret using:
+    
+    ```shell
+    openssl rand -hex 32
+    ```
+    
+    Copy the output and paste this output in `APP_SECRET`.
+    
+3.  Create the environment file.
+    
+    ```plaintext
+    nano .env
+    ```
+    
+    Add the following configuration.
+    
+    ```plaintext
+    # Website Configuration
+    DOMAIN_NAME=doc.example.com
+    APP_URL=https://doc.example.com
+    LETSENCRYPT_EMAIL=your_email@example.com
+    
+    # Global Application Secret
+    APP_SECRET=YOUR_GENERATED_SECRET
+    
+    # PostgreSQL Configuration 
+    DATABASE_URL=DATABASE_CONNECTION_STRING
+    
+    # Redis Configuration
+    REDIS_URL=redis://redis:6379
+    ```
+    
+    Replace the following values:
+    
+    *   `doc.example.com` with your domain name.
+        
+    *   `admin@example.com` with your email address used for SSL certificate notifications.
+        
+    *   `DATABASE_CONNECTION_STRING` with your PostgreSQL connection string.
+        
+    *   `YOUR_GENERATED_SECRET` with a generated secret.
+        
+
+## Step 2: Create the Docker Compose Manifest
+
+The deployment consists of three containers. Traefik handles HTTPS traffic and SSL certificate management, Docmost runs the application, and Redis provides caching and background job processing.
+
+1.  Create the Docker Compose file.
+    
+    ```shell
+    nano docker-compose.yml
+    ```
+    
+    Add the following configuration.
+    
+    ```yaml
+    services:
+      traefik:
+        image: traefik:v3.6
+        command:
+          - "--providers.docker=true"
+          - "--providers.docker.exposedbydefault=false"
+          - "--entrypoints.web.address=:80"
+          - "--entrypoints.websecure.address=:443"
+          - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+          - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+          - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
+          - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+          - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+        ports:
+          - "80:80"
+          - "443:443"
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock:ro
+          - letsencrypt:/letsencrypt
+        restart: unless-stopped
+    
+      docmost:
+        image: docmost/docmost:latest
+        depends_on:
+          - redis
+        environment:
+          APP_URL: ${APP_URL}
+          APP_SECRET: ${APP_SECRET}
+          DATABASE_URL: ${DATABASE_URL}
+          REDIS_URL: ${REDIS_URL}
+        ports:
+          - "3000:3000"
+        restart: unless-stopped
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.docmost.rule=Host(`${DOMAIN_NAME}`)"
+          - "traefik.http.routers.docmost.entrypoints=websecure"
+          - "traefik.http.routers.docmost.tls.certresolver=letsencrypt"
+          - "traefik.http.services.docmost.loadbalancer.server.port=3000"
+        volumes:
+          - docmost:/app/data/storage
+    
+      redis:
+        image: redis:8
+        command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+        restart: unless-stopped
+        volumes:
+          - redis_data:/data
+    
+    volumes:
+      docmost:
+      letsencrypt:
+      redis_data:
+    ```
+    
+
+## Step 3: Deploy the Application
+
+Docker Compose will pull the required images, create the network and volumes, and start all services.
+
+1.  Start the deployment.
+    
+    ```shell
+    docker compose up -d
+    ```
+    
+    The first deployment may take a few minutes while Docker downloads the required container images.
+    
+2.  Verify that all containers are running.
+    
+    ```shell
+    docker compose ps
+    ```
+    
+    You should see the `docmost`, `redis`, and `traefik` containers in an `Up` state.
+    
+3.  Review the application logs.
+    
+    ```shell
+    docker compose logs
+    ```
+    
+    Check the output for any startup errors related to PostgreSQL, Redis, or SSL certificate provisioning before continuing to the next step.
+    
+
+## Step 4: Deployment Verification
+
+Once all containers are running, verify that Docmost is accessible through your domain and that Traefik has successfully issued an SSL certificate.
+
+1.  Open your browser and navigate to your configured domain.
+    
+    ```plaintext
+    https://doc.example.com
+    ```
+    
+    Replace:
+    
+    *   [doc.example.com](http://doc.example.com) with your actual domain name.
+        
+    
+    ![Docmost workspace setup screen](/image%20copy.png)
+    
+2.  Create the administrator account by entering:
+    
+    *   Workspace Name
+        
+    *   Your Name
+        
+    *   Your Email
+        
+    *   Password
+        
+3.  Click **Create Workspace** to continue.
+    
+4.  After creating the administrator account, create your first workspace. The workspace acts as the primary location for storing pages, documentation, and team content.
+    
+    ![Create your first Docmost workspace](/image%20copy%202.png)
+    
+    ![Docmost workspace dashboard](/image%20copy%203.png)
+
+5.  To confirm that HTTPS is working correctly, click the padlock icon in your browser's address bar and verify that the SSL certificate is valid.
+
+    ![Valid SSL certificate shown in the browser](/image%20copy%204.png)
+    
+
+## Troubleshooting
+
+1.  **Docker or Docker Compose Is Not Installed:** If Docker or Docker Compose is not installed on the server, you'll see an error similar to the following when starting the deployment:
+    
+    ```plaintext
+    Command 'docker' not found, but can be installed with:
+    snap install docker         # version 29.3.1, or
+    apt  install docker.io      # version 29.1.3-0ubuntu3~24.04.2
+    apt  install podman-docker  # version 4.9.3+ds1-1ubuntu0.2
+    See 'snap info docker' for additional versions.
+    ```
+    
+    **Fix:** Install Docker and Docker Compose before proceeding with the deployment.
+    
+2.  **Domain Does Not Resolve to the Server:** If the domain is not pointing to your server, you'll see an error similar to the following when accessing the application.
+    
+    ```plaintext
+    This site can't be reached
+    
+    DNS_PROBE_FINISHED_NXDOMAIN
+    
+    or
+    
+    ERR_NAME_NOT_RESOLVED
+    ```
+    
+    **Fix:**
+    
+    *   Check DNS resolution using:
+        
+        ```plaintext
+        nslookup doc.example.com
+        ```
+        
+        Replace `doc.example.com` with your domain.
+        
+    *   A successful lookup should return your server's public IP address.
+        
+        ```plaintext
+        Name: doc.example.com
+        
+        Address: YOUR_SERVER_IP
+        ```
+        
+    *   If the returned IP address is incorrect, update the A record in your DNS provider and wait for DNS propagation to complete.
+        
+3.  **SSL Certificate Is Not Issued:** If Traefik is unable to obtain an SSL certificate from Let's Encrypt, you'll see a browser warning similar to the following:
+    
+    ```plaintext
+    Your connection is not private
+    
+    NET::ERR_CERT_AUTHORITY_INVALID
+    
+    or
+    
+    NET::ERR_CERT_COMMON_NAME_INVALID
+    ```
+    
+    **Fix:**
+    
+    *   Verify that the domain resolves to your server.
+        
+        ```shell
+        nslookup doc.example.com
+        ```
+        
+        Replace `doc.example.com` with your domain.
+        
+    *   Check that ports 80 and 443 are open.
+        
+        ```shell
+        sudo ufw status
+        ```
+        
+    *   If UFW is enabled, allow HTTP and HTTPS traffic.
+        
+        ```shell
+        sudo ufw allow 80
+        sudo ufw allow 443
+        ```
+        
+    *   Review the Traefik logs for certificate-related errors.
+        
+        ```shell
+        docker compose logs traefik
+        ```
+        
+    *   Once the DNS record is correct and the required ports are accessible, Traefik will automatically request and install a valid SSL certificate from Let's Encrypt.
+        
+4.  **PostgreSQL Connection Failed:** If Docmost cannot connect to the PostgreSQL database, the application container may fail to start or repeatedly restart. You may see errors similar to the following in the container logs:
+    
+    ```plaintext
+    error: password authentication failed for user
+    
+    or
+    
+    connect ECONNREFUSED
+    
+    or
+    
+    database does not exist
+    ```
+    
+    **Fix:**
+    
+    *   Verify that the `DATABASE_URL` value in the `.env` file is correct.
+        
+        ```plaintext
+        DATABASE_URL=postgresql://USERNAME:PASSWORD@HOST:PORT/DATABASE?sslmode=require
+        ```
+        
+    *   Test the connection directly from the server using:
+        
+        ```shell
+        docker run --rm -it postgres:alpine psql "postgresql://USERNAME:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
+        ```
+        
+    *   If the connection succeeds, you'll see a PostgreSQL prompt similar to:
+        
+    *   psql (17.x) SSL connection established
+        
+    *   Review the Docmost logs for additional database-related errors.
+        
+        ```shell
+        docker compose logs docmost
+        ```
+        
+    *   Correct any connection string issues and restart the application.
+        
+        ```shell
+        docker compose restart docmost
+        ```
+        
+
+## Further Steps
+
+Your Docmost instance is now running and ready to use. Depending on your requirements, you may want to configure additional features such as user invitations, email notifications, object storage, authentication providers, and other application settings.
+
+For a complete list of supported environment variables and configuration options, refer to the official Docmost documentation:
+
+[https://docmost.com/docs/self-hosting/environment-variables](https://docmost.com/docs/self-hosting/environment-variables)
+
+## Conclusion
+
+In this article, you deployed Docmost using Docker Compose with Traefik for automatic HTTPS and an external PostgreSQL database for persistent data storage. You configured the required environment variables, created the Docker Compose stack, deployed the application, and verified that the installation was working correctly.
+
+With Docmost running on your own infrastructure, you have full control over your documentation platform while benefiting from automatic SSL certificate management and a production-ready deployment architecture. You can now start creating workspaces, organising documentation, and collaborating with your team.
+

@@ -1,9 +1,414 @@
 ---
 sidebar_label: Security
 sidebar_position: 3
-title: Secure a Self-Hosted Docmost Server
+title: How to Secure a Self-Hosted Docmost Server
 ---
 
-# Secure a Self-Hosted Docmost Server
+# How to Secure a Self-Hosted Docmost Server
 
-*A production-ready guide is being prepared.*
+Deploying Docmost is only the first step. Once your server is publicly accessible, it becomes a target for automated bots that continuously scan for exposed services, weak SSH configurations, and other common security vulnerabilities.
+
+A production deployment requires more than Docker and HTTPS. Securing the underlying Linux server is essential to protect your application, reduce the attack surface, and help prevent unauthorized access.
+
+In this article, you'll secure your Docmost server by configuring SSH key authentication, disabling root and password-based logins, enabling a firewall with UFW, installing Fail2ban, and configuring automatic security updates.
+
+**Note:** This article assumes you have already deployed Docmost by following the deployment article and are logged in as the non-root user created during the installation.
+
+## Prerequisites
+
+Before you begin, make sure you have the following:
+
+*   **A Running Docmost Deployment:** Complete the deployment by following the previous guide before proceeding with this article.
+    
+*   **A Non-Root User with Sudo Privileges:** This article assumes you are logged in as the non-root user created during the deployment.
+    
+*   **SSH Access to the Server:** You'll need SSH access to apply the security configurations and verify the changes.
+    
+
+## Step 1: Configure SSH Key Authentication
+
+SSH key authentication is more secure than password-based authentication because it uses a cryptographic key pair to verify your identity. Instead of entering a password each time you connect, your local machine uses a private key that matches a public key stored on the server. This significantly reduces the risk of brute-force attacks against your SSH service.
+
+1.  Generate a new SSH key on your local machine:
+    
+
+    ```bash
+    ssh-keygen -t ed25519 -C "docmost-server"
+    ```
+
+    The command generates a public and private SSH key pair. By default, the keys are stored in the `~/.ssh` directory.
+
+1.  Display the public key:
+    
+
+    ```bash
+    cat ~/.ssh/id_ed25519.pub
+    ```
+
+    Copy the entire output.
+
+
+
+    **Note:** The following commands should be executed while logged in as the non-root user created during the deployment. Do **not** perform these steps as the `root` user. The SSH public key should be added to the non-root user's account because it will be used for all future server administration.
+
+1.  On the server, create the SSH directory if it doesn't already exist:
+    
+
+    ```bash
+    mkdir -p ~/.ssh
+    ```
+
+1.  Create the `authorized_keys` file:
+    
+
+    ```bash
+    nano ~/.ssh/authorized_keys
+    ```
+
+    Paste the public key you copied earlier, save the file, and exit the editor.
+
+1.  Set the correct permissions:
+    
+
+    ```bash
+    chmod 700 ~/.ssh
+    chmod 600 ~/.ssh/authorized_keys
+    ```
+
+1.  Verify the permissions:
+    
+
+    ```plaintext
+    ls -la ~/.ssh
+    ```
+
+    You should see output similar to:
+
+    ```plaintext
+    drwx------ 2 USERNAME USERNAME 4096 Jun 25 10:00 .ssh
+    -rw------- 1 USERNAME USERNAME  104 Jun 25 10:01 authorized_keys
+    ```
+
+1.  Open a new terminal on your local machine and verify that you can connect to the server using SSH:
+    
+
+    ```bash
+    ssh USERNAME@SERVER_IP
+    ```
+
+    Replace:
+
+    *   `USERNAME` with the non-root username created during the deployment.
+        
+    *   `SERVER_IP` with your server's public IP address.
+        
+
+    If you're able to log in successfully, SSH key authentication has been configured correctly. Verify that you're logged in before proceeding to the next step.
+
+## Step 2: Disable Root Login
+
+Many Linux servers allow the `root` user to log in over SSH. Since the `root` account has unrestricted access to the system, it is a common target for automated login attempts. Disabling root login forces administrators to authenticate using a non-root user with sudo privileges, reducing the risk of unauthorized access.
+
+> **Important:** Before proceeding, verify that you can successfully log in to the server using the non-root user and the SSH key configured in the previous step. Disabling root login without verifying SSH key authentication may prevent you from accessing the server.
+
+1.  Open the SSH server configuration file:
+    
+
+    ```bash
+    sudo nano /etc/ssh/sshd_config
+    ```
+
+1.  Locate the following directive:
+    
+
+    ```plaintext
+    PermitRootLogin yes
+    ```
+
+    Update it to:
+
+    ```plaintext
+    PermitRootLogin no
+    ```
+
+    Save the file and exit the editor.
+
+1.  Validate the SSH configuration:
+    
+
+    ```bash
+    sudo sshd -t
+    ```
+
+    If the command produces no output, the configuration is valid.
+
+1.  Reload the SSH service to apply the changes:
+    
+
+    ```bash
+    sudo systemctl reload ssh
+    ```
+
+1.  Open a new terminal on your local machine and verify that you can no longer log in as the `root` user:
+    
+
+    ```bash
+    ssh root@SERVER_IP
+    ```
+
+    Replace:
+
+    *   `SERVER_IP` with your server's public IP address.
+        
+
+1.  You should see a permission denied message similar to:
+    
+
+    ```plaintext
+    Permission denied, please try again.
+    ```
+
+    This confirms that direct SSH access for the `root` user has been disabled successfully.
+
+## Step 3: Disable Password Authentication
+
+Now that SSH key authentication is working correctly, you can disable password-based authentication. This prevents attackers from attempting to guess account passwords through brute-force attacks, allowing only users with an authorized SSH key to access the server.
+
+> **Important:** Before disabling password authentication, verify that you can successfully log in to the server using the SSH key configured in the previous step. If SSH key authentication is not working, you may lose access to the server.
+
+1. Open the SSH server configuration file:
+
+    ```bash
+    sudo nano /etc/ssh/sshd_config
+    ```
+
+2. Locate the following directive:
+
+    ```plaintext
+    #PasswordAuthentication yes
+    ```
+
+    Update it to:
+
+    ```plaintext
+    PasswordAuthentication no
+    ```
+
+3. Also verify that the following directive is enabled:
+
+    ```plaintext
+    PubkeyAuthentication yes
+    ```
+
+    Save the file and exit the editor.
+
+4. Validate the SSH configuration:
+
+    ```bash
+    sudo sshd -t
+    ```
+
+    If the command produces no output, the configuration is valid.
+
+5. Reload the SSH service to apply the changes:
+
+    ```bash
+    sudo systemctl reload ssh
+    ```
+
+6. Verify the active SSH configuration:
+
+    ```bash
+    sudo sshd -T | grep passwordauthentication
+    ```
+
+    You should see output similar to:
+
+    ```plaintext
+    passwordauthentication no
+    ```
+
+    > **Troubleshooting:** If the command still returns `passwordauthentication yes`, check for additional SSH configuration files under `/etc/ssh/sshd_config.d/` that may override the setting. Some Ubuntu cloud images managed by cloud-init include a file such as `50-cloud-init.conf` with `PasswordAuthentication yes`. Update the overriding file to `PasswordAuthentication no`, reload the SSH service, and verify the configuration again.
+
+7. Open a new terminal and verify that you can still log in using your SSH key:
+
+    ```bash
+    ssh USERNAME@SERVER_IP
+    ```
+
+    Replace:
+
+    *   `USERNAME` with the non-root username created during the deployment.
+        
+    *   `SERVER_IP` with your server's public IP address.
+        
+
+    If you're able to log in successfully without entering the server account password, password-based authentication has been disabled successfully.
+
+## Step 4: Configure the UFW Firewall
+
+By default, a server can expose services to the internet that do not need to be publicly accessible. A firewall helps reduce the attack surface by blocking all incoming traffic except the ports required for your application. For a typical Docmost deployment with Traefik, only SSH, HTTP, and HTTPS should be accessible.
+
+1. Configure the default firewall policies:
+
+    ```bash
+    sudo ufw default deny incoming
+    sudo ufw default allow outgoing
+    ```
+
+2. Allow SSH connections:
+
+    ```bash
+    sudo ufw allow OpenSSH
+    ```
+
+3. Allow HTTP and HTTPS traffic:
+
+    ```bash
+    sudo ufw allow 80/tcp
+    sudo ufw allow 443/tcp
+    ```
+
+4. Enable the firewall:
+
+    ```bash
+    sudo ufw enable
+    ```
+
+    When prompted, enter:
+
+    ```plaintext
+    y
+    ```
+
+    to continue.
+
+5. Verify the firewall configuration:
+
+    ```bash
+    sudo ufw status verbose
+    ```
+
+    You should see output similar to:
+
+    ```plaintext
+    Status: active
+
+    To                         Action      From
+    --                         ------      ----
+    22/tcp (OpenSSH)           ALLOW IN    Anywhere
+    80/tcp                     ALLOW IN    Anywhere
+    443/tcp                    ALLOW IN    Anywhere
+    ```
+
+    The firewall is now configured to allow only SSH, HTTP, and HTTPS traffic while blocking all other incoming connections. This reduces the server's attack surface by preventing access to ports that are not required for your deployment.
+
+## Step 5: Install and Configure Fail2ban
+
+Even after disabling root login and password-based authentication, your server will continue to receive automated SSH login attempts. Fail2ban helps protect against these attacks by monitoring authentication logs and automatically banning IP addresses that repeatedly fail to authenticate.
+
+1. Update the package index:
+
+    ```bash
+    sudo apt update
+    ```
+
+2. Install Fail2ban:
+
+    ```bash
+    sudo apt install fail2ban -y
+    ```
+
+3. Verify that the service is running:
+
+    ```bash
+    sudo systemctl status fail2ban
+    ```
+
+    You should see output similar to:
+
+    ```plaintext
+    Active: active (running)
+    ```
+
+4. View the list of active jails:
+
+    ```bash
+    sudo fail2ban-client status
+    ```
+
+    You should see output similar to:
+
+    ```plaintext
+    Status
+    |- Number of jail: 1
+    `- Jail list: sshd
+    ```
+
+5. View the status of the SSH jail:
+
+    ```bash
+    sudo fail2ban-client status sshd
+    ```
+
+    You should see output similar to:
+
+    ```plaintext
+    Status for the jail: sshd
+    |- Filter
+    |  |- Currently failed: 33
+    |  |- Total failed: 63
+    |  `- Journal matches: _SYSTEMD_UNIT=sshd.service + _COMM=sshd
+    `- Actions
+       |- Currently banned: 2
+       |- Total banned: 2
+       `- Banned IP list: 92.207.4.157 150.5.131.119
+    ```
+
+    The output confirms that Fail2ban is actively monitoring SSH login attempts and automatically blocking IP addresses that repeatedly fail authentication. This provides an additional layer of protection against automated brute-force attacks targeting your server.
+
+## Step 6: Enable Automatic Security Updates
+
+Keeping your server up to date is an important part of maintaining a secure deployment. Ubuntu provides the `unattended-upgrades` package, which automatically installs security updates in the background, helping protect your server against newly discovered vulnerabilities.
+
+1. Install the `unattended-upgrades` package:
+
+    ```bash
+    sudo apt install unattended-upgrades -y
+    ```
+
+2. Enable automatic security updates:
+
+    ```bash
+    sudo dpkg-reconfigure --priority=low unattended-upgrades
+    ```
+
+3. When prompted, select:
+
+    ```plaintext
+    Yes
+    ```
+
+    and press **Enter**.
+
+4. Verify that the service is running:
+
+    ```bash
+    sudo systemctl status unattended-upgrades
+    ```
+
+    You should see output similar to:
+
+    ```plaintext
+    Active: active (running)
+    ```
+
+    With automatic security updates enabled, Ubuntu will automatically install security patches, helping keep your server protected without requiring manual intervention.
+
+## Conclusion
+
+In this article, you secured your Docmost server by configuring SSH key authentication, disabling root and password-based logins, enabling a firewall with UFW, installing Fail2ban, and enabling automatic security updates.
+
+These security measures provide a strong foundation for running Docmost in a production environment and help protect your server against common threats such as unauthorized access and brute-force attacks.
+
+As you continue self-hosting applications, regularly review your server configuration, apply security updates, and monitor your system to keep your deployment secure.

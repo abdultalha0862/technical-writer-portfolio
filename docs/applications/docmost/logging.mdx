@@ -1,9 +1,648 @@
 ---
 sidebar_label: Logging
 sidebar_position: 5
-title: Add Centralised Logging with Loki and Promtail
+title: How to Add Centralised Logging with Loki and Promtail
 ---
 
-# Add Centralised Logging with Loki and Promtail
+# How to Add Centralised Logging with Loki and Promtail
 
-*A production-ready guide is being prepared.*
+## Introduction
+
+Monitoring tells you **when** something is wrong, but it rarely tells you **why**. Metrics such as CPU usage, memory consumption, and container health help you identify that a problem exists, but investigating the root cause requires access to application and container logs.
+
+In the previous article, we built a monitoring stack for Docmost using Prometheus, Grafana, Node Exporter, and cAdvisor. While that setup provides complete visibility into your server and container metrics, troubleshooting production issues still requires collecting logs from multiple Docker containers.
+
+In this article, you'll extend the existing monitoring stack by adding centralised logging with **Loki** and **Promtail**. Promtail collects logs from every Docker container running on the server and forwards them to Loki, where they are indexed and stored. Grafana then allows you to search, filter, and analyse logs from a single interface alongside your existing metrics.
+
+## Prerequisites
+
+Before you begin, ensure you have the following:
+
+*   A Linux server with **Docmost** already deployed using Docker Compose.
+    
+*   An external PostgreSQL database configured for your Docmost instance.
+    
+*   Docker and Docker Compose installed.
+    
+*   Prometheus, Grafana, Node Exporter, and cAdvisor already configured for monitoring.
+    
+*   A domain name pointing to your server with the following DNS records configured:
+    
+    *   `docmost.example.com`
+        
+    *   `grafana.docmost.example.com`
+        
+    *   `prometheus.docmost.example.com`
+        
+
+## **Create a Non-Root Administrative User**
+
+Many cloud providers provide root access by default. While this is convenient for initial setup, production deployments are generally managed through a non-root user with sudo privileges. This follows Linux security best practices and reduces the risk of accidental system-wide changes.
+
+1.  Create a new user:
+    
+    ```bash
+    adduser USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with your preferred username.
+        
+2.  Grant the user sudo privileges:
+    
+    ```bash
+    usermod -aG sudo USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+3.  Verify that the user has sudo access:
+    
+    ```bash
+    groups USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+    
+    You should see output similar to:
+    
+    ```plaintext
+    USERNAME : USERNAME sudo
+    ```
+    
+4.  Switch to the new user:
+    
+    ```bash
+    su - USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+5.  Verify sudo access:
+    
+    ```bash
+    sudo whoami
+    ```
+    
+    You should see output similar to:
+    
+    ```plaintext
+    root
+    ```
+    
+6.  Allow the user to manage Docker without using the root account:
+    
+    ```bash
+    sudo usermod -aG docker USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+7.  Apply the new Docker group to the current session:
+    
+    ```bash
+    newgrp docker
+    ```
+    
+
+## Step 1: Create the Loki and Promtail Configuration Files
+
+Loki requires a configuration file to define how logs are stored, indexed, and retained, while Promtail uses a configuration file to discover Docker container logs and forward them to Loki. In this step, you'll create the required directory structure and configure both services.
+
+1.  Create the project directory and navigate to it:
+    
+    ```shell
+    mkdir ~/docmost-monitoring
+    cd ~/docmost-monitoring
+    ```
+    
+    This directory will contain all files related to the deployment, including the Docker Compose manifest, Prometheus configuration, and environment variables.
+    
+2.  Create the directories for Loki, Promtail and Prometheus:
+    
+    ```shell
+    mkdir loki
+    mkdir promtail
+    mkdir prometheus
+    ```
+    
+3.  Create the Loki configuration file:
+    
+    ```shell
+    nano loki/loki-config.yml
+    ```
+    
+    Add the following configuration:
+    
+    ```text
+    auth_enabled: false
+    
+    server:
+      http_listen_port: 3100
+    
+    common:
+      path_prefix: /loki
+    
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+    
+      replication_factor: 1
+    
+      ring:
+        kvstore:
+          store: inmemory
+    
+    schema_config:
+      configs:
+        - from: 2025-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    
+    storage_config:
+      filesystem:
+        directory: /loki/chunks
+    
+    limits_config:
+      retention_period: 72h
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+    
+    compactor:
+      working_directory: /loki/retention
+      retention_enabled: true
+      delete_request_store: filesystem
+      compaction_interval: 10m
+    
+    analytics:
+      reporting_enabled: false
+    ```
+    
+    This configuration stores logs on the local filesystem, retains logs for 72 hours, automatically removes expired log data, and disables anonymous usage reporting.
+    
+4.  Create the Promtail configuration file:
+    
+    ```shell
+    nano promtail/promtail-config.yml
+    ```
+    
+    Add the following configuration:
+    
+    ```text
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+      log_level: info
+    
+    positions:
+      filename: /var/lib/promtail/positions.yaml
+    
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+        external_labels:
+          host: docmost-server
+    
+    scrape_configs:
+      - job_name: docker
+    
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              job: docker
+              __path__: /var/lib/docker/containers/*/*-json.log
+    ```
+    
+    This configuration instructs Promtail to monitor the Docker JSON log files, keep track of the last processed log position, and forward all collected logs to the Loki service running on the same Docker network.
+    
+5.  Create the Prometheus configuration file.
+    
+    ```shell
+    nano prometheus/prometheus.yml
+    ```
+    
+    Add the following configuration:
+    
+    ```yaml
+    global:
+      scrape_interval: 15s
+    
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets:
+              - localhost:9090
+    
+      - job_name: node-exporter
+        static_configs:
+          - targets:
+              - node-exporter:9100
+    
+      - job_name: cadvisor
+        static_configs:
+          - targets:
+              - cadvisor:8080
+    ```
+    
+    This configuration instructs Prometheus to collect metrics from itself, Node Exporter, and cAdvisor every 15 seconds.
+    
+6.  Generate a secure secret:
+    
+    ```shell
+    openssl rand -hex 32
+    ```
+    
+    Copy the generated output and paste it into the `APP_SECRET` variable in the next step.
+    
+7.  Create the environment file:
+    
+    ```shell
+    nano .env
+    ```
+    
+    Add the following configuration:
+    
+    ```text
+    # Website Configuration
+    DOMAIN_NAME=doc.example.com
+    APP_URL=https://doc.example.com
+    LETSENCRYPT_EMAIL=your_email@example.com
+    
+    # Global Application Secret
+    APP_SECRET=YOUR_GENERATED_SECRET
+    
+    # PostgreSQL Configuration
+    DATABASE_URL=DATABASE_CONNECTION_STRING
+    
+    # Redis Configuration
+    REDIS_URL=redis://redis:6379
+    
+    # Grafana Configuration
+    GRAFANA_ADMIN_USER=admin
+    GRAFANA_ADMIN_PASSWORD=YOUR_GRAFANA_PASSWORD
+    ```
+    
+    Replace the following values:
+    
+    *   `doc.example.com` with your domain name.
+        
+    *   `your_email@example.com` with your email address used for SSL certificate notifications.
+        
+    *   `DATABASE_CONNECTION_STRING` with your PostgreSQL connection string.
+        
+    *   `YOUR_GENERATED_SECRET` with the secret generated in the previous step.
+        
+    *   `YOUR_GRAFANA_PASSWORD` with a strong password for the Grafana administrator account.
+        
+
+## **Step 2: Create the Docker Compose File**
+
+The deployment consists of nine containers. Traefik handles HTTPS traffic and SSL certificate management. Docmost runs the application, Redis provides caching and background job processing, Prometheus collects metrics, Grafana visualises the metrics, Node Exporter exposes host metrics, and cAdvisor exposes Docker container metrics.
+
+1.  Create the Docker Compose file:
+    
+    ```shell
+    nano docker-compose.yml
+    ```
+    
+2.  Add the following configuration:
+    
+    ```shell
+    services:
+      traefik:
+        image: traefik:v3.6
+        command:
+          - "--providers.docker=true"
+          - "--providers.docker.exposedbydefault=false"
+          - "--providers.docker.network=monitoring"
+          - "--entrypoints.web.address=:80"
+          - "--entrypoints.websecure.address=:443"
+          - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+          - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+          - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+          - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
+          - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+        ports:
+          - "80:80"
+          - "443:443"
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock:ro
+          - letsencrypt:/letsencrypt
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      docmost:
+        image: docmost/docmost:latest
+        depends_on:
+          - redis
+        environment:
+          APP_URL: ${APP_URL}
+          APP_SECRET: ${APP_SECRET}
+          DATABASE_URL: ${DATABASE_URL}
+          REDIS_URL: ${REDIS_URL}
+        volumes:
+          - docmost:/app/data/storage
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.docmost.rule=Host(`${DOMAIN_NAME}`)"
+          - "traefik.http.routers.docmost.entrypoints=websecure"
+          - "traefik.http.routers.docmost.tls.certresolver=letsencrypt"
+          - "traefik.http.services.docmost.loadbalancer.server.port=3000"
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      redis:
+        image: redis:8
+        command:
+          - redis-server
+          - --appendonly
+          - "yes"
+          - --maxmemory-policy
+          - noeviction
+        volumes:
+          - redis_data:/data
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      node-exporter:
+        image: prom/node-exporter:v1.11.1
+        command:
+          - "--path.rootfs=/host"
+        volumes:
+          - "/:/host:ro,rslave"
+        pid: host
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      cadvisor:
+        image: gcr.io/cadvisor/cadvisor:v0.52.1
+        privileged: true
+        devices:
+          - /dev/kmsg
+        volumes:
+          - "/:/rootfs:ro"
+          - "/var/run:/var/run:ro"
+          - "/sys:/sys:ro"
+          - "/var/lib/docker:/var/lib/docker:ro"
+          - "/dev/disk:/dev/disk:ro"
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      prometheus:
+        image: prom/prometheus:v3.5.0
+        command:
+          - "--config.file=/etc/prometheus/prometheus.yml"
+          - "--storage.tsdb.path=/prometheus"
+        volumes:
+          - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+          - prometheus_data:/prometheus
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.prometheus.rule=Host(`prometheus.${DOMAIN_NAME}`)"
+          - "traefik.http.routers.prometheus.entrypoints=websecure"
+          - "traefik.http.routers.prometheus.tls.certresolver=letsencrypt"
+          - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      loki:
+        image: grafana/loki:3.5.3
+        command:
+          - "-config.file=/etc/loki/loki-config.yml"
+        volumes:
+          - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+          - loki_data:/loki
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        healthcheck:
+          test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+          interval: 30s
+          timeout: 5s
+          retries: 3
+          start_period: 10s
+        networks:
+          - monitoring
+    
+      promtail:
+        image: grafana/promtail:3.5.3
+        command:
+          - "-config.file=/etc/promtail/promtail-config.yml"
+        depends_on:
+          - loki
+        volumes:
+          - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+          - /var/lib/docker/containers:/var/lib/docker/containers:ro
+          - promtail_positions:/var/lib/promtail
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        healthcheck:
+          test: ["CMD", "wget", "--spider", "-q", "http://localhost:9080/ready"]
+          interval: 30s
+          timeout: 5s
+          retries: 3
+          start_period: 10s
+        networks:
+          - monitoring
+    
+      grafana:
+        image: grafana/grafana:12.0.2
+        depends_on:
+          - prometheus
+          - loki
+        environment:
+          GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+          GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+        volumes:
+          - grafana_data:/var/lib/grafana
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN_NAME}`)"
+          - "traefik.http.routers.grafana.entrypoints=websecure"
+          - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+          - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+    volumes:
+      docmost:
+      redis_data:
+      letsencrypt:
+      prometheus_data:
+      grafana_data:
+      loki_data:
+      promtail_positions:
+    
+    networks:
+      monitoring:
+        driver: bridge
+    ```
+    
+
+## **Step 3: Deploy the Application**
+
+Docker Compose will pull the required images, create the Docker network and persistent volumes, and start all services required for the monitoring stack.
+
+1.  Start the deployment:
+    
+    ```shell
+    docker compose up -d
+    ```
+    
+    The first deployment may take a few minutes while Docker downloads the required container images.
+    
+2.  Verify that all containers are running:
+    
+    ```shell
+    docker compose ps
+    ```
+    
+    You should see the `traefik`, `docmost`, `redis`, `node-exporter`, `cadvisor`, `prometheus`, and `grafana` containers in an `Up` state.
+    
+3.  Review the application logs:
+    
+    ```shell
+    docker compose logs
+    ```
+    
+    To view the logs for a specific service, use:
+    
+    ```shell
+    docker compose logs <service-name>
+    ```
+    
+    You can replace `prometheus` with `docmost`, `grafana`, `traefik`, `node-exporter`, `cadvisor`, or `redis` to review the logs for that service.
+    
+
+## **Step 4: Deployment Verification**
+
+Once all containers are running, you'll verify that Docmost, Prometheus, and Grafana are accessible over HTTPS.
+
+1.  **Verify Docmost**: Open your browser and navigate to your configured domain:
+    
+    ```text
+    https://doc.example.com
+    ```
+    
+    Replace:
+    
+    *   `doc.example.com` with your actual domain name.
+        
+2.  **Verify Prometheus**: Open your browser and navigate to your Prometheus subdomain:
+    
+    ```text
+    https://prometheus.doc.example.com
+    ```
+    
+    Replace:
+    
+    *   `doc.example.com` with your actual domain name.
+        
+3.  **Verify Grafana**: Open your browser and navigate to your Grafana subdomain:
+    
+    ```text
+    https://grafana.doc.example.com
+    ```
+    
+    Replace:
+    
+    *   `doc.example.com` with your actual domain name.
+        
+    
+    Log in using the Grafana administrator credentials you configured in the `.env` file. After logging in, confirm that you can reach the Grafana home dashboard before continuing to the next step.
+    
+
+## Step 5: Import Grafana Dashboards
+
+Before you import the dashboards, you must add Prometheus and Loki as data sources in Grafana.
+
+1.  **Configure the Prometheus Data Source**
+    
+    ![Prometheus Configuration](image.png align="center")
+    
+    Log in to Grafana and go to **Connections → Data sources**. Click **Add new data source** and choose **Prometheus**. Set the Prometheus server URL to:
+    
+    ```text
+    http://prometheus:9090
+    ```
+    
+    ![Configure the Prometheus server URL in Grafana](/image%20copy%2011.png)
+    
+    Click **Save & test**. A message will show that it connected.
+    
+2.  **Configure the Loki Data Source**
+    
+    Go to **Connections → Data sources**. Click **Add new data source** and choose **Loki**. Set the Loki server URL to:
+    
+    ```text
+    http://loki:3100
+    ```
+    
+    ![Configure the Loki data source in Grafana](/image%20copy%2012.png)
+    
+    Click **Save & test**. A message will show that it connected.
+    
+
+## Step 6: Verify Log Collection
+
+1.  After connecting Loki as a Grafana data source, verify that logs are being collected from your Docker containers.
+    
+2.  Log in to Grafana and navigate to **Explore**. Select the **Loki** data source and run the following query:
+    
+    ```text
+    {job="docker"}
+    ```
+    
+    ![Loki query showing Docker container logs in Grafana Explore](/image%20copy%2013.png)
+    
+3.  This query displays logs collected from all Docker containers running on the server.
+    
+4.  To display only error logs, run the following query:
+    
+    ```text
+    {job="docker"} |= "error"
+    ```
+    
+    ![Loki query filtering Docker error logs in Grafana](/image%20copy%2014.png)
+    
+5.  If log entries are displayed for both queries, your centralised logging stack is working correctly. Promtail is successfully collecting Docker container logs, forwarding them to Loki, and Grafana is able to query and display the logs.
+    
+
+## Conclusion
+
+In this article, you configured centralised logging for your Docmost deployment using Loki, Promtail, and Grafana. You deployed Loki to store and index logs, configured Promtail to collect Docker container logs, connected Loki as a Grafana data source, and verified that logs could be queried successfully.
+
+With centralised logging in place, you can now search, filter, and analyse logs from all your Docker containers through a single interface, making it easier to troubleshoot application issues and monitor your production environment.
