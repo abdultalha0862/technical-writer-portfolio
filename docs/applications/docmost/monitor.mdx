@@ -1,9 +1,594 @@
 ---
 sidebar_label: Monitoring
 sidebar_position: 4
-title: Monitor Docmost with Grafana and Prometheus
+title: How to Monitor Docmost with Grafana and Prometheus
 ---
 
-# Monitor Docmost with Grafana and Prometheus
+# How to Monitor Docmost with Grafana and Prometheus
 
-*A production-ready guide is being prepared.*
+## Introduction
+
+Monitoring is an essential part of running Docmost in production. It helps you track server health, measure container resource usage, and catch issues before they affect your users. Prometheus collects metrics from your infrastructure, while Grafana visualises those metrics through interactive dashboards. Combined with Node Exporter and cAdvisor, they give you real-time visibility into your server and Docker containers.
+
+In this article, you'll deploy a production-ready monitoring stack for Docmost using Docker Compose. You'll configure Prometheus, Grafana, Node Exporter, and cAdvisor, secure the monitoring services with Traefik and automatic HTTPS, and import Grafana dashboards to monitor your server, Docker containers, and Prometheus instance.
+
+> **Note:** This article was tested on a live server before publication. Every command, configuration file, and verification step was validated on the final deployment to maintain accuracy.
+
+## Prerequisites
+
+Before you begin, make sure you have the following:
+
+*   **A Running Docmost Instance:** The server should have at least **2 vCPUs** and **4 GB of RAM**.
+    
+*   **An External Managed PostgreSQL Database:** A managed PostgreSQL instance configured as the Docmost database.
+    
+*   **Docker and Docker Compose:** Installed on your server to deploy Prometheus, Grafana, Node Exporter, and cAdvisor.
+    
+*   **A Domain Name:** Three subdomains with A records pointing to your server's public IP address (for example, `doc.example.com`, `prometheus.doc.example.com`, and `grafana.doc.example.com`).
+    
+*   **Open Ports 80 and 443:** Required for Traefik to serve HTTPS traffic and automatically obtain SSL certificates from Let's Encrypt.
+    
+
+## Architecture Diagram
+
+The architecture diagram below shows the monitoring setup used in this article. Client requests are routed through Traefik, which securely exposes Docmost, Prometheus, and Grafana over HTTPS. Prometheus collects host metrics from Node Exporter and container metrics from cAdvisor, storing them in its time-series database. Grafana then queries Prometheus to visualise these metrics through interactive dashboards, giving you real-time insights into server health, container performance, and the monitoring infrastructure itself.
+
+![Docmost monitoring architecture diagram](/image%20copy%205.png)
+
+## Create a Non-Root Administrative User
+
+Many cloud providers provide root access by default. While this is convenient for initial setup, production deployments are generally managed through a non-root user with sudo privileges. This follows Linux security best practices and reduces the risk of accidental system-wide changes.
+
+1.  Create a new user:
+    
+    ```bash
+    adduser USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with your preferred username.
+        
+2.  Grant the user sudo privileges:
+    
+    ```bash
+    usermod -aG sudo USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+3.  Verify that the user has sudo access:
+    
+    ```bash
+    groups USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+    
+    You should see output similar to:
+    
+    ```plaintext
+    USERNAME : USERNAME sudo
+    ```
+    
+4.  Switch to the new user:
+    
+    ```bash
+    su - USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+5.  Verify sudo access:
+    
+    ```bash
+    sudo whoami
+    ```
+    
+    You should see output similar to:
+    
+    ```plaintext
+    root
+    ```
+    
+6.  Allow the user to manage Docker without using the root account:
+    
+    ```bash
+    sudo usermod -aG docker USERNAME
+    ```
+    
+    Replace:
+    
+    *   `USERNAME` with the username you created in the previous step.
+        
+7.  Apply the new Docker group to the current session:
+    
+    ```bash
+    newgrp docker
+    ```
+    
+
+## Step 1: Create the Project Directory and Configure Prometheus
+
+Prometheus uses a configuration file to define the metrics it collects, while environment variables store the application settings, domain information, and Grafana credentials. In this step, you'll create a dedicated project directory, write the Prometheus configuration, and define the environment variables used throughout the deployment.
+
+1.  Create the project directory and navigate to it:
+    
+    ```bash
+    mkdir ~/docmost-monitoring
+    cd ~/docmost-monitoring
+    ```
+    
+    This directory will contain all files related to the deployment, including the Docker Compose manifest, Prometheus configuration, and environment variables.
+    
+2.  Create the Prometheus configuration directory:
+    
+    ```bash
+    mkdir prometheus
+    nano prometheus/prometheus.yml
+    ```
+    
+    Add the following configuration:
+    
+    ```yaml
+    
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    scrape_configs:
+      - job_name: "prometheus"
+        static_configs:
+          - targets:
+              - "prometheus:9090"
+    
+      - job_name: "node-exporter"
+        static_configs:
+          - targets:
+              - "node-exporter:9100"
+    
+      - job_name: "cadvisor"
+        static_configs:
+          - targets:
+              - "cadvisor:8080"
+    ```
+    
+3.  Generate a secure secret:
+    
+    ```bash
+    openssl rand -hex 32
+    ```
+    
+    Copy the generated output and paste it into the `APP_SECRET` variable in the next step.
+    
+4.  Create the environment file:
+    
+    ```bash
+    nano .env
+    ```
+    
+    Add the following configuration:
+    
+    ```ini
+    # Website Configuration
+    DOMAIN_NAME=doc.example.com
+    APP_URL=https://doc.example.com
+    LETSENCRYPT_EMAIL=your_email@example.com
+    
+    # Global Application Secret
+    APP_SECRET=YOUR_GENERATED_SECRET
+    
+    # PostgreSQL Configuration
+    DATABASE_URL=DATABASE_CONNECTION_STRING
+    
+    # Redis Configuration
+    REDIS_URL=redis://redis:6379
+    
+    # Grafana Configuration
+    GRAFANA_ADMIN_USER=admin
+    GRAFANA_ADMIN_PASSWORD=YOUR_GRAFANA_PASSWORD
+    ```
+    
+    Replace the following values:
+    
+    *   `doc.example.com` with your domain name.
+        
+    *   `your_email@example.com` with your email address used for SSL certificate notifications.
+        
+    *   `DATABASE_CONNECTION_STRING` with your PostgreSQL connection string.
+        
+    *   `YOUR_GENERATED_SECRET` with the secret generated in the previous step.
+        
+    *   `YOUR_GRAFANA_PASSWORD` with a strong password for the Grafana administrator account.
+        
+
+## Step 2: Create the Docker Compose File
+
+The deployment consists of seven containers. Traefik handles HTTPS traffic and SSL certificate management. Docmost runs the application, Redis provides caching and background job processing, Prometheus collects metrics, Grafana visualises the metrics, Node Exporter exposes host metrics, and cAdvisor exposes Docker container metrics.
+
+1.  Create the Docker Compose file:
+    
+    ```bash
+    nano docker-compose.yml
+    ```
+    
+    Add the following configuration:
+    
+    ```yaml
+    services:
+      traefik:
+        image: traefik:v3.6
+        command:
+          - "--providers.docker=true"
+          - "--providers.docker.exposedbydefault=false"
+          - "--providers.docker.network=monitoring"
+          - "--entrypoints.web.address=:80"
+          - "--entrypoints.websecure.address=:443"
+          - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+          - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+          - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+          - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
+          - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+        ports:
+          - "80:80"
+          - "443:443"
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock:ro
+          - letsencrypt:/letsencrypt
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      docmost:
+        image: docmost/docmost:latest
+        depends_on:
+          - redis
+        environment:
+          APP_URL: ${APP_URL}
+          APP_SECRET: ${APP_SECRET}
+          DATABASE_URL: ${DATABASE_URL}
+          REDIS_URL: ${REDIS_URL}
+        volumes:
+          - docmost:/app/data/storage
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.docmost.rule=Host(`${DOMAIN_NAME}`)"
+          - "traefik.http.routers.docmost.entrypoints=websecure"
+          - "traefik.http.routers.docmost.tls.certresolver=letsencrypt"
+          - "traefik.http.services.docmost.loadbalancer.server.port=3000"
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      redis:
+        image: redis:8
+        command:
+          - redis-server
+          - --appendonly
+          - "yes"
+          - --maxmemory-policy
+          - noeviction
+        volumes:
+          - redis_data:/data
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      node-exporter:
+        image: prom/node-exporter:v1.11.1
+        command:
+          - "--path.rootfs=/host"
+        volumes:
+          - "/:/host:ro,rslave"
+        pid: host
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      cadvisor:
+        image: gcr.io/cadvisor/cadvisor:v0.52.1
+        privileged: true
+        devices:
+          - /dev/kmsg
+        volumes:
+          - "/:/rootfs:ro"
+          - "/var/run:/var/run:ro"
+          - "/sys:/sys:ro"
+          - "/var/lib/docker:/var/lib/docker:ro"
+          - "/dev/disk:/dev/disk:ro"
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      prometheus:
+        image: prom/prometheus:v3.5.0
+        command:
+          - "--config.file=/etc/prometheus/prometheus.yml"
+          - "--storage.tsdb.path=/prometheus"
+        volumes:
+          - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+          - prometheus_data:/prometheus
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.prometheus.rule=Host(`prometheus.${DOMAIN_NAME}`)"
+          - "traefik.http.routers.prometheus.entrypoints=websecure"
+          - "traefik.http.routers.prometheus.tls.certresolver=letsencrypt"
+          - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+      grafana:
+        image: grafana/grafana:12.0.2
+        depends_on:
+          - prometheus
+        environment:
+          GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+          GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+        volumes:
+          - grafana_data:/var/lib/grafana
+        labels:
+          - "traefik.enable=true"
+          - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN_NAME}`)"
+          - "traefik.http.routers.grafana.entrypoints=websecure"
+          - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+          - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        networks:
+          - monitoring
+    
+    volumes:
+      docmost:
+      redis_data:
+      letsencrypt:
+      prometheus_data:
+      grafana_data:
+    
+    networks:
+      monitoring:
+        driver: bridge
+    ```
+    
+
+## Step 3: Deploy the Application
+
+Docker Compose will pull the required images, create the Docker network and persistent volumes, and start all services required for the monitoring stack.
+
+1.  Start the deployment:
+    
+    ```bash
+    docker compose up -d
+    ```
+    
+
+The first deployment may take a few minutes while Docker downloads the required container images.
+
+2.  Verify that all containers are running:
+    
+    ```bash
+    docker compose ps
+    ```
+    
+    You should see the `traefik`, `docmost`, `redis`, `node-exporter`, `cadvisor`, `prometheus`, and `grafana` containers in an `Up` state.
+    
+3.  Review the application logs:
+    
+    ```bash
+    docker compose logs
+    ```
+    
+    To view the logs for a specific service, use:
+    
+    ```bash
+    docker compose logs <service-name>
+    ```
+    
+    For example, to view the Prometheus logs:
+    
+    ```bash
+    docker compose logs prometheus
+    ```
+    
+    You can replace `prometheus` with `docmost`, `grafana`, `traefik`, `node-exporter`, `cadvisor`, or `redis` to review the logs for that service.
+    
+
+## Step 4: Deployment Verification
+
+Once all containers are running, you'll verify that Docmost, Prometheus, and Grafana are accessible over HTTPS.
+
+1.  **Verify Docmost**: Open your browser and navigate to your configured domain:
+    
+    ```plaintext
+    https://doc.example.com
+    ```
+    
+    Replace:
+    
+    *   `doc.example.com` with your actual domain name.
+        
+2.  **Verify Prometheus**: Open your browser and navigate to your Prometheus subdomain:
+    
+    ```plaintext
+    https://prometheus.doc.example.com
+    ```
+    
+    Replace:
+    
+    *   `doc.example.com` with your actual domain name.
+        
+3.  **Verify Grafana**: Open your browser and navigate to your Grafana subdomain:
+    
+    ```plaintext
+    https://grafana.doc.example.com
+    ```
+    
+    Replace:
+    
+    *   `doc.example.com` with your actual domain name.
+        
+    
+    Log in using the Grafana administrator credentials you configured in the `.env` file. After logging in, confirm that you can reach the Grafana home dashboard before continuing to the next step.
+    
+
+## Step 5: Import Grafana Dashboards
+
+Before importing the dashboards, you need to connect Prometheus as a Grafana data source.
+
+1.  **Configure the Prometheus Data Source**
+    
+    ![Add a new Prometheus data source in Grafana](/image%20copy%206.png)
+    
+    Log in to Grafana and navigate to **Connections → Data sources**. Click **Add new data source** and select **Prometheus**. Set the Prometheus server URL to:
+    
+    ```text
+    http://prometheus:9090
+    ```
+    
+    ![Configure the Prometheus server URL in Grafana](/image%20copy%207.png)
+    
+    Click **Save & test**. You should see a confirmation that the data source is connected successfully.
+    
+2.  **Import the Node Exporter Full Dashboard**
+    
+    The Node Exporter Full dashboard displays host-level metrics including CPU usage, memory utilisation, disk usage, network traffic, and system load.
+    
+    From the Grafana sidebar, navigate to **Dashboards → New → Import**. Enter the following dashboard ID:
+    
+    ```plaintext
+    1860
+    ```
+    
+    Select the Prometheus data source and click **Import**.
+    
+    ![Node Exporter Full dashboard in Grafana](/image%20copy%208.png)
+    
+3.  **Import the cAdvisor Dashboard**
+    
+    The cAdvisor dashboard displays container-level metrics, including CPU usage, memory consumption, network traffic, and filesystem utilisation for each Docker container.
+    
+    From the Grafana sidebar, navigate to **Dashboards → New → Import**. Enter the following dashboard ID:
+    
+    ```plaintext
+    19792
+    ```
+    
+    Select the Prometheus data source and click **Import**.
+    
+    ![cAdvisor container metrics dashboard in Grafana](/image%20copy%209.png)
+    
+4.  **Import the Prometheus 2.0 Overview Dashboard**
+    
+    The Prometheus 2.0 Overview dashboard displays metrics for your Prometheus server, including scrape status, storage usage, query performance, and target health.
+    
+    From the Grafana sidebar, navigate to **Dashboards → New → Import**. Enter the following dashboard ID:
+    
+    ```plaintext
+    3662
+    ```
+    
+    Select the Prometheus data source and click **Import**.
+    
+    ![Prometheus 2.0 Overview dashboard in Grafana](/image%20copy%2010.png)
+    
+
+## Troubleshooting
+
+1.  **Prometheus Targets Are Down**: If one or more targets appear as `DOWN` in the Prometheus targets page, you may see an error similar to the following:
+    
+    ```plaintext
+    State: DOWN
+    Error: Get "http://node-exporter:9100/metrics": dial tcp: lookup node-exporter: no such host
+    ```
+    
+    **Fix:** Verify that all containers are running and that the service names in `prometheus.yml` match the Docker Compose service names exactly. Restart the monitoring stack after making any configuration changes:
+    
+    ```bash
+    docker compose down
+    docker compose up -d
+    ```
+    
+2.  **Grafana Cannot Connect to Prometheus**: If the Prometheus data source test fails in Grafana, you may see an error similar to the following:
+    
+    ```plaintext
+    Post "http://wrongurl:9090/api/v1/query": dial tcp: lookup wrongurl: no such host
+    ```
+    
+    **Fix:** Navigate to **Connections → Data sources**, select your Prometheus data source, and verify that the server URL is set to:
+    
+    ```plaintext
+    http://prometheus:9090
+    ```
+    
+    Click **Save & test** to verify the connection.
+    
+3.  **Node Exporter Dashboard Shows "No Data"**
+    
+    If the Node Exporter Full dashboard displays **No data** across all panels, the dashboard may be pointing at the wrong data source or job.
+    
+    **Fix:** Open the dashboard settings and confirm that the Prometheus data source is selected and the `Job` variable is set to `node-exporter`. You can also confirm that Prometheus is collecting metrics by running the following query in **Grafana → Explore**:
+    
+    ```plaintext
+    up
+    ```
+    
+    The `node-exporter` target should return a value of `1`.
+    
+4.  **SSL Certificate Is Not Issued**
+    
+    If Traefik serves a self-signed certificate instead of a Let's Encrypt certificate, your browser will show a warning similar to the following:
+    
+    ```plaintext
+    Your connection is not private
+    
+    NET::ERR_CERT_AUTHORITY_INVALID
+    
+    or
+    
+    NET::ERR_CERT_COMMON_NAME_INVALID
+    ```
+    
+    **Fix:** Verify that your DNS records point to your server's public IP address and that ports 80 and 443 are open. You can check port access with:
+    
+    ```bash
+    sudo ufw status
+    ```
+    
+    If UFW is enabled, allow HTTP and HTTPS traffic:
+    
+    ```bash
+    sudo ufw allow 80
+    sudo ufw allow 443
+    ```
+    
+    Review the Traefik logs for certificate-related errors:
+    
+    ```bash
+    docker compose logs traefik
+    ```
+    
+    Once DNS propagation is complete and the required ports are accessible, Traefik will automatically request and install a valid SSL certificate from Let's Encrypt.
+    
+
+## Conclusion
+
+In this article, you deployed a production-ready monitoring stack for Docmost using Docker Compose. You configured Prometheus to collect metrics, Grafana to visualise them, Node Exporter to monitor the host system, and cAdvisor to monitor Docker containers. You also secured the monitoring services with Traefik and automatic Let's Encrypt SSL certificates, and imported three Grafana dashboards to give you immediate visibility into your server, containers, and Prometheus instance.
+
+With this setup running on your own infrastructure, you have the visibility needed to catch performance issues early, troubleshoot your deployment confidently, and keep your Docmost instance reliable for your team.
+

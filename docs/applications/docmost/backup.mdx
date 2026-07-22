@@ -1,9 +1,401 @@
 ---
 sidebar_label: Backup & Restore
 sidebar_position: 6
-title: Back Up and Restore Docmost
+title: How to Back Up and Restore Docmost with Docker Compose and PostgreSQL
 ---
 
-# Back Up and Restore Docmost
+# How to Back Up and Restore Docmost with Docker Compose and PostgreSQL
 
-*A production-ready guide is being prepared.*
+## Introduction
+
+Backups are essential for any production Docmost deployment. Whether your server fails, a Docker volume is accidentally deleted, or your PostgreSQL database becomes corrupted, having a reliable backup lets you recover your workspace with minimal downtime and data loss.
+
+A complete Docmost backup consists of three parts: the PostgreSQL database, the storage volume, and the application configuration. The database stores your users, workspaces, pages, comments, permissions, and attachment metadata. The storage volume holds the actual uploaded files, such as images, PDFs, and other attachments. The application configuration, made up of the `.env` file and `docker-compose.yml`, preserves the settings needed to start the application and connect it to the database. Backing up only one of these three is not enough to fully recover your instance.
+
+In this article, you will back up a self-hosted Docmost instance running with Docker Compose, an external PostgreSQL database, and local file storage. To confirm the backup strategy actually works, you will then perform a complete disaster recovery test: deleting the application data, restoring it from your backups, and verifying from both the command line and the Docmost web interface that users, workspaces, pages, and uploaded files have been successfully recovered.
+
+> Note: This article was tested on a live server before publication. Every command, configuration file, and verification step was validated on the final deployment to maintain accuracy.
+
+## Prerequisites
+
+Before you begin, make sure you have the following:
+
+- **A Running Docmost Deployment**: A self-hosted Docmost instance running with Docker Compose, connected to an external PostgreSQL database, with local file storage configured for uploads.
+
+- **A Non-Root User with Sudo Privileges**: SSH access to the server using the non-root user created during deployment.
+
+- **The PostgreSQL Client**: `pg_dump`, `pg_restore`, and `psql` installed on the server. The client version should match or be compatible with your PostgreSQL server version.
+
+- **Existing Data in Docmost**: At least one workspace with pages and uploaded files, so you can confirm that the backup and restore process works correctly.
+
+## Step 1: Create Create the Project Directory
+
+Keeping the database backup, storage archive, and configuration files in a single location makes them easier to manage, transfer, and restore later. In this step, you'll create a dedicated directory to store all backup files for this run.
+
+1. Create a `backups` directory inside your Docmost project, then create a timestamped folder for the current backup:
+
+    ```bash
+    mkdir -p backups
+
+    BACKUP_DIR=backups/docmost-$(date +%F-%H-%M-%S)
+    mkdir -p "$BACKUP_DIR"
+
+    echo "$BACKUP_DIR"
+    ```
+
+2. The backup directory should look similar to this:
+
+    ```
+    backups/
+    └── docmost-2026-07-04-07-08-29/
+    ```
+
+## Step 2: Back Up the PostgreSQL Database
+
+The PostgreSQL database stores all of your Docmost application data, including users, workspaces, pages, comments, permissions, and attachment metadata.
+
+1. Install the PostgreSQL client, if it isn't already available on the server:
+
+    ```bash
+    sudo apt update
+    sudo apt install postgresql-client -y
+    ```
+
+    If your PostgreSQL server is running a newer major version than the default Ubuntu package, install the matching client from the official PostgreSQL repository instead.
+
+2. Create the database backup using `pg_dump`:
+
+    ```bash
+    pg_dump \
+      --dbname="$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)" \
+      --format=custom \
+      --verbose \
+      --file="$BACKUP_DIR/docmost-db.backup"
+    ```
+
+    The `--format=custom` option creates a compressed backup that can be restored using `pg_restore` and supports more flexible recovery options than a plain SQL dump.
+
+3. Confirm that the backup file was created and has a non-zero size:
+
+    ```bash
+    ls -lh "$BACKUP_DIR"
+    ```
+
+4. Inspect the backup using `pg_restore`. This reads the archive and lists its contents without restoring any data:
+
+    ```bash
+    pg_restore --list "$BACKUP_DIR/docmost-db.backup" | head -20
+    ```
+
+    If the command lists database objects such as tables, functions, and extensions, the backup is valid and ready to be used for restoration.
+
+## Step 3: Back Up the Storage Volume
+
+The storage volume contains all uploaded files, including images, PDFs, and other attachments. Backing up the database alone is not enough, because it only stores metadata about these files, not the files themselves.
+
+1. Inspect the storage volume to confirm its contents:
+
+    ```bash
+    docker run --rm \
+      -v docmost_docmost:/data \
+      alpine ls -R /data
+    ```
+
+2. Create a compressed archive of the storage volume and save it to the backup directory:
+
+    ```bash
+    docker run --rm \
+      -v docmost_docmost:/data:ro \
+      -v "$(pwd)/$BACKUP_DIR":/backup \
+      alpine \
+      tar czf /backup/docmost-storage.tar.gz -C /data .
+    ```
+
+3. Inspect the archive without extracting it:
+
+    ```bash
+    tar -tzf "$BACKUP_DIR/docmost-storage.tar.gz"
+    ```
+
+    If the command lists the uploaded files and directories, the storage backup has been created successfully and is ready to be restored when needed.
+
+## Step 4: Back Up the Application Configuration
+
+The application configuration contains the settings required to run your Docmost deployment, including the database connection, application secrets, and Docker Compose configuration.
+
+1. Copy the configuration files to the backup directory:
+
+    ```bash
+    cp .env "$BACKUP_DIR/"
+    cp docker-compose.yml "$BACKUP_DIR/"
+    ```
+
+2. Verify that the files were copied successfully:
+
+    ```bash
+    ls -lah "$BACKUP_DIR"
+    ```
+
+3. The backup directory should now contain all the files required to restore your Docmost deployment:
+
+    ```
+    backups/
+    └── docmost-2026-07-04-07-08-29/
+        ├── .env
+        ├── docker-compose.yml
+        ├── docmost-db.backup
+        └── docmost-storage.tar.gz
+    ```
+
+## Step 5: Record a Pre-Disaster Baseline
+
+Before simulating a disaster, record the current state of your Docmost instance. These values will confirm, later, that the restored instance matches the original deployment.
+
+1. Connect to the PostgreSQL database:
+
+    ```bash
+    psql "$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)"
+    ```
+
+2. Run the following queries:
+
+    ```sql
+    SELECT COUNT(*) AS users FROM users;
+
+    SELECT COUNT(*) AS workspaces FROM workspaces;
+
+    SELECT COUNT(*) AS pages FROM pages;
+
+    SELECT COUNT(*) AS attachments FROM attachments;
+    ```
+
+3. Record the results, then exit the PostgreSQL shell:
+
+    ```sql
+    \q
+    ```
+
+## Step 6: Simulate a Disaster
+
+Creating a backup is only half of a disaster recovery strategy. To trust your backups, you need to confirm they can successfully restore your deployment after a real data loss event.
+
+> **Warning:** The following steps permanently delete your existing Docmost data. Make sure you have completed and verified your backups before proceeding.
+
+1. Stop and remove the running Docmost containers:
+
+    ```bash
+    docker compose down
+    ```
+
+2. Verify that all containers have been removed:
+
+    ```bash
+    docker compose ps
+    ```
+
+3. List the available Docker volumes:
+
+    ```bash
+    docker volume ls
+    ```
+
+4. Remove the Docmost storage volume:
+
+    ```bash
+    docker volume rm docmost_docmost
+    ```
+
+5. Verify that the volume has been removed:
+
+    ```bash
+    docker volume ls
+    ```
+
+6. Connect to your PostgreSQL database:
+
+    ```bash
+    psql "$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)"
+    ```
+
+7. Drop and recreate the `public` schema to remove all application data:
+
+    ```sql
+    DROP SCHEMA public CASCADE;
+    CREATE SCHEMA public;
+    GRANT ALL ON SCHEMA public TO doadmin;
+    GRANT ALL ON SCHEMA public TO public;
+    ```
+
+8. Exit the PostgreSQL shell:
+
+    ```sql
+    \q
+    ```
+
+9. Reconnect to the database and verify that all tables have been removed:
+
+    ```bash
+    psql "$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)"
+    ```
+
+    ```sql
+    \dt
+    ```
+
+    If the command returns `Did not find any relations.`, the database has been successfully cleared and is ready for the restore process.
+
+## Step 7: Restore the Backup
+
+Now that you've simulated a disaster, restore the Docmost deployment using the backups created earlier.
+
+1. Create a new Docker volume to store the uploaded files:
+
+    ```bash
+    docker volume create docmost_docmost
+    ```
+
+2. Extract the storage backup into the newly created volume:
+
+    ```bash
+    docker run --rm \
+      -v docmost_docmost:/data \
+      -v "$(pwd)/$BACKUP_DIR":/backup:ro \
+      alpine \
+      sh -c "tar xzf /backup/docmost-storage.tar.gz -C /data"
+    ```
+
+3. Verify that the uploaded files have been restored:
+
+    ```bash
+    docker run --rm \
+      -v docmost_docmost:/data \
+      alpine \
+      find /data -type f
+    ```
+
+4. Restore the database from the backup archive:
+
+    ```bash
+    pg_restore \
+      --dbname="$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)" \
+      --clean \
+      --if-exists \
+      --verbose \
+      "$BACKUP_DIR/docmost-db.backup"
+    ```
+
+5. Verify that the database tables have been recreated:
+
+    ```bash
+    psql "$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)"
+    ```
+
+    ```sql
+    \dt
+    ```
+
+6. Exit the PostgreSQL shell:
+
+    ```sql
+    \q
+    ```
+
+7. Start the application:
+
+    ```bash
+    docker compose up -d
+    ```
+
+8. Verify that all containers are running:
+
+    ```bash
+    docker compose ps
+    ```
+
+9. Check the application logs to confirm that Docmost starts successfully:
+
+    ```bash
+    docker compose logs -f docmost
+    ```
+
+## Step 8: Verify the Restore
+
+After restoring the backup, confirm that your Docmost deployment has been recovered successfully by comparing it against the baseline you recorded in Step 5.
+
+1. Connect to the PostgreSQL database:
+
+    ```bash
+    psql "$(grep '^DATABASE_URL=' .env | cut -d '=' -f2-)"
+    ```
+
+2. Run the same queries again:
+
+    ```sql
+    SELECT COUNT(*) AS users FROM users;
+
+    SELECT COUNT(*) AS workspaces FROM workspaces;
+
+    SELECT COUNT(*) AS pages FROM pages;
+
+    SELECT COUNT(*) AS attachments FROM attachments;
+    ```
+
+    The values should match the counts you recorded before the disaster simulation.
+
+3. Verify that the uploaded files have been restored:
+
+    ```bash
+    sudo find /var/lib/docker/volumes/docmost_docmost/_data -type f
+    ```
+
+4. Open your Docmost instance in a browser and verify the following:
+
+- You can log in successfully.
+- The workspace has been restored.
+- All pages are present.
+- Uploaded PDFs and images open correctly.
+- Attachments are accessible without errors.
+
+    If all of these checks pass, your backup and restore process has been successfully validated.
+
+## Troubleshooting
+
+1. `pg_dump` Reports a Server Version Mismatch: If your PostgreSQL client version is older than your PostgreSQL server version, you'll see an error similar to the following:
+
+    ```text
+    pg_dump: error: aborting because of server version mismatch
+    ```
+
+    **Fix**: Install a PostgreSQL client version that matches or is newer than your PostgreSQL server, then run the backup again.
+
+2. `pg_restore` Cannot Connect to the Database: If `pg_restore` attempts to connect to a local PostgreSQL server instead of your remote database, the `DATABASE_URL` may not be set correctly.
+
+    **Fix**: Read the connection string directly from the `.env` file to confirm it's correct:
+
+    ```bash
+    grep '^DATABASE_URL=' .env
+    ```
+
+3. Backup Files Cannot Be Found: If commands fail with an error similar to the following:
+
+    ```text
+    No such file or directory
+    ```
+
+    **Fix**: Verify that the `BACKUP_DIR` variable points to the correct backup directory:
+
+    ```bash
+    echo "$BACKUP_DIR"
+    ```
+
+    You can also pass the backup directory path directly in each command instead of relying on the environment variable.
+
+4. Uploaded Files Are Missing After the Restore: If pages are restored but attachments are missing, the storage volume likely wasn't restored correctly.
+
+    **Fix**: Confirm that `docmost-storage.tar.gz` was extracted into the `docmost_docmost` Docker volume before starting the application, then repeat the storage restore step.
+
+## Conclusion
+
+In this article, you backed up a self-hosted Docmost deployment, including the PostgreSQL database, uploaded files, and application configuration. You also performed a complete disaster recovery test by deleting the application data, restoring it from your backups, and verifying that users, workspaces, pages, and attachments were recovered successfully.
+
+With a tested backup and restore process in place, you can run your Docmost deployment with confidence, knowing that a server failure, accidental deletion, or database corruption won't result in permanent data loss.
