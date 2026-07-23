@@ -146,6 +146,11 @@ const config: Config = {
           label: 'freeCodeCamp',
           position: 'right',
         },
+        {
+          href: 'https://www.civo.com/authors/abdul-talha',
+          label: 'Civo',
+          position: 'right',
+        },
       ],
     },
 
@@ -192,6 +197,10 @@ const config: Config = {
             {
               label: 'freeCodeCamp',
               href: 'https://www.freecodecamp.org/news/author/abdultalha3226/',
+            },
+            {
+              label: 'Civo',
+              href: 'https://www.civo.com/authors/abdul-talha',
             },
           ],
         },

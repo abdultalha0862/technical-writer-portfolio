@@ -66,8 +66,9 @@ const recentlyUpdated = [
 const publications = [
   {label: 'Vultr Docs', href: 'https://docs.vultr.com/author/abdul-talha'},
   {label: 'freeCodeCamp', href: 'https://freecodecamp.org/news/author/abdultalha3226/'},
+  {label: 'Civo', href: 'https://www.civo.com/authors/abdul-talha'},
   {label: 'Dev.to', href: 'https://dev.to/abdultalha08'},
-  {label: 'Portfolio Docs', to: '/docs/applications'},
+  
 ];
 
 const workflowSteps = ['Research', 'Deploy', 'Debug', 'Validate', 'Document'];
