@@ -67,53 +67,125 @@ Before instrumenting the Express.js application, you need an observability backe
 
 1. Install the Foundry CLI and add it to your current shell's `PATH`.
 
-```bash
-curl -fsSL https://signoz.io/foundry.sh | bash
-export PATH="/root/.local/bin:$PATH"
-```
+    ```bash
+    curl -fsSL https://signoz.io/foundry.sh | bash
+    export PATH="/root/.local/bin:$PATH"
+    ```
 
 2. Verify that the installation completed successfully.
 
-```bash
-foundryctl version
-```
+    ```bash
+    foundryctl version
+    ```
 
 3. Create a file named `casting.yaml` with the following configuration.
 
-```yaml
-apiVersion: v1alpha1
-kind: Installation
-metadata:
-  name: signoz
+    ```yaml
+    apiVersion: v1alpha1
+    kind: Installation
+    metadata:
+    name: signoz
 
-spec:
-  deployment:
-    flavor: compose
-    mode: docker
-```
+    spec:
+    deployment:
+        flavor: compose
+        mode: docker
+    ```
 
-This configuration instructs `foundryctl` to deploy SigNoz using Docker Compose.
+    This configuration instructs `foundryctl` to deploy SigNoz using Docker Compose.
 
-4. Deploy SigNoz.
+4. Deploy SigNoz using the installation configuration.
 
-```bash
-foundryctl cast -f casting.yaml
-```
+    ```bash
+    foundryctl cast -f casting.yaml
+    ```
 
-The installer validates your Docker environment, generates the required Docker Compose resources, and starts the SigNoz services.
+    The installer validates your Docker environment, generates the required Docker Compose resources, and starts the SigNoz services.
 
 5. Verify that the deployment completed successfully.
 
-```bash
-docker ps
-```
+    ```bash
+    docker ps
+    ```
 
-You should see containers such as `signoz-frontend`, `signoz-query-service`, `signoz-otel-collector`, and `clickhouse`.
+    You should see containers such as `signoz-frontend`, `signoz-query-service`, `signoz-otel-collector`, and `clickhouse`.
 
 6. Open the SigNoz dashboard in your browser.
 
-```text
-http://<SERVER-IP>:8080
-```
+    ```text
+    http://<SERVER-IP>:8080
+    ```
 
-Replace `<SERVER-IP>` with your server's IP address. If the installation completed successfully, the SigNoz setup page should load. Create the initial administrator account to access the dashboard.
+    Replace `<SERVER-IP>` with your server's IP address. If the installation completed successfully, the SigNoz setup page should load. Create the initial administrator account to access the dashboard.
+
+## Step 2: Create the Express.js Application
+
+Create a simple Express.js application that you'll instrument throughout this tutorial. You'll initialize a new Node.js project, install the required dependencies, and create a basic application that serves as the foundation for the remaining steps.
+
+1. Create a project directory and navigate into it.
+
+    ```bash
+    mkdir express-observability
+    cd express-observability
+    ```
+
+2. Initialize a new Node.js project.
+
+    ```bash
+    npm init -y
+    ```
+
+3. Install the application dependencies.
+
+    ```bash
+    npm install express helmet cors morgan dotenv
+    ```
+
+4. Install the development dependency.
+
+    ```bash
+    npm install --save-dev nodemon
+    ```
+
+5. Create the following project structure.
+
+    ```text
+    express-observability/
+    ├── src/
+    │   ├── app.js
+    │   ├── server.js
+    │   ├── controllers/
+    │   ├── routes/
+    │   ├── db/
+    │   ├── cache/
+    │   └── telemetry/
+    ├── .env
+    ├── package.json
+    └── package-lock.json
+    ```
+
+6. Create a `.env` file with the following configuration.
+
+    ```env
+    PORT=3000
+    ```
+
+7. Start the development server.
+
+    ```bash
+    npm run dev
+    ```
+
+    If the application starts successfully, you should see output similar to the following.
+
+    ```text
+    Server running on port 3000
+    ```
+
+    Open the following URL in your browser.
+
+    ```text
+    http://<SERVER-IP>:3000
+    ```
+
+    Replace `<SERVER-IP>` with your server's IP address. If the application is running successfully, you're ready to instrument it with OpenTelemetry in the next step.
