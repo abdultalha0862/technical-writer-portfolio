@@ -457,3 +457,48 @@ After integrating PostgreSQL and Redis, verify that your Express.js application 
     * PostgreSQL query spans are visible for the initial request.
     * Redis spans are visible after caching is enabled.
 
+## Common Issues That I Encountered
+
+
+1. After starting the application, traces were exported successfully, but the service appeared as `unknown_service:node` instead of the configured service name.
+
+    **Cause:** An older OpenTelemetry exporter package was installed together with a newer OpenTelemetry SDK, causing the service name configuration to be ignored.
+
+    **Fix:** Remove the old exporter package and install the latest OTLP gRPC trace exporter.
+
+    ```bash
+    npm uninstall @opentelemetry/exporter-otlp-grpc
+
+    npm install @opentelemetry/exporter-trace-otlp-grpc
+    ```
+
+    After restarting the application, the service appeared correctly as `express-observability-demo` in SigNoz.
+
+
+
+
+2. After instrumenting the application, no traces appeared in the SigNoz dashboard.
+
+    **Cause:** The OpenTelemetry SDK was initialized after the Express application was loaded, preventing automatic instrumentation from patching the required libraries.
+
+    **Fix:** Load the instrumentation file before importing any other application modules.
+
+    ```javascript
+    require('./telemetry/instrumentation');
+    ```
+
+    This statement should be the first line in `src/server.js`.
+
+
+
+3. HTTP request traces appeared in SigNoz, but PostgreSQL or Redis spans were not visible.
+
+    **Cause:** The corresponding service was either not running or the application was unable to establish a connection.
+
+    **Fix:** Verify that both containers are running.
+
+    ```bash
+    docker ps
+    ```
+
+    Also verify that the PostgreSQL and Redis connection settings in the `.env` file match your Docker Compose configuration.
