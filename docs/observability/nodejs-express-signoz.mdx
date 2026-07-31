@@ -425,3 +425,35 @@ With PostgreSQL integrated, the next step is to add Redis caching. In this step,
     * The second request no longer includes a PostgreSQL query span.
 
 9. After completing this step, your application is exporting HTTP, PostgreSQL, and Redis traces to SigNoz, providing complete visibility into the request lifecycle.
+
+## Step 6: View Traces in SigNoz
+
+After integrating PostgreSQL and Redis, verify that your Express.js application is exporting traces to SigNoz. In this step, you'll inspect the collected traces and explore the HTTP requests, database queries, and cache operations captured by OpenTelemetry.
+
+1. Open the SigNoz dashboard in your browser.
+
+    ```text
+    http://<SERVER-IP>:8080
+    ```
+
+    Replace `<SERVER-IP>` with your server's IP address.
+
+2. From the left navigation menu, select **Explorer**. Generate application traffic by sending a few requests to the `/users` endpoint.
+
+    ```bash
+    curl http://<SERVER-IP>:3000/users
+    curl http://<SERVER-IP>:3000/users
+    ```
+
+3. The first request retrieves data from PostgreSQL and stores it in Redis. The second request returns the cached response from Redis.
+
+4. Open any trace from the `express-observability-demo` service to inspect its details. The trace view displays the sequence of operations performed while processing the request. Depending on whether the request was served from PostgreSQL or Redis, you'll see spans representing the incoming HTTP request, Express.js middleware, Redis operations, and PostgreSQL queries.
+
+    Verify that:
+
+    * The service name is **express-observability-demo**.
+    * The trace completed successfully.
+    * Multiple spans are displayed for the request.
+    * PostgreSQL query spans are visible for the initial request.
+    * Redis spans are visible after caching is enabled.
+
