@@ -502,3 +502,13 @@ After integrating PostgreSQL and Redis, verify that your Express.js application 
     ```
 
     Also verify that the PostgreSQL and Redis connection settings in the `.env` file match your Docker Compose configuration.
+
+## Conclusion
+
+You've successfully instrumented an Express.js application with OpenTelemetry and configured it to export traces to SigNoz. Along the way, you integrated PostgreSQL for data storage and Redis for caching, allowing you to observe HTTP requests, database queries, and cache operations from a single dashboard.
+
+With this observability pipeline in place, you can better understand how requests flow through your application, identify performance bottlenecks, and troubleshoot issues more efficiently. To continue exploring application observability, check out the following resources:
+
+* **OpenTelemetry Documentation:** https://opentelemetry.io/docs/
+* **SigNoz Documentation:** https://signoz.io/docs/introduction/
+* **Node.js Instrumentation Guide:** https://opentelemetry.io/docs/languages/js/
