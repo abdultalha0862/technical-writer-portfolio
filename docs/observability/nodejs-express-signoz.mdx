@@ -5,7 +5,7 @@ title: Instrument Node.js Express App with OpenTelemetry and SigNoz
 ---
 # Instrument a Node.js Express Application with OpenTelemetry and SigNoz: A Complete Guide
 
-Modern Node.js applications often use databases, caches, and other services to process requests. When an application becomes slow or encounters errors, logs alone provide enough information to identify the root cause. OpenTelemetry provides a standard way to collect telemetry data, while SigNoz is an open-source observability platform that helps you collect, visualize, and analyze distributed traces. Together, they make it easier to understand application behavior, monitor performance, and troubleshoot issues.
+Modern Node.js applications often use databases, caches, and other services to process requests. When an application becomes slow or encounters errors, logs alone rarely provide enough information to identify the root cause. OpenTelemetry provides a standard way to collect telemetry data, while SigNoz is an open-source observability platform that helps you collect, visualize, and analyze distributed traces. Together, they make it easier to understand application behavior, monitor performance, and troubleshoot issues.
 
 In this tutorial, you'll build an Express.js application instrumented with OpenTelemetry and export traces to SigNoz. You'll integrate PostgreSQL for data storage and Redis for caching, then use SigNoz to visualize HTTP requests, database queries, and cache operations. By the end of this guide, you'll have a complete observability pipeline for monitoring and troubleshooting your Node.js application.
 
@@ -25,8 +25,6 @@ Before you begin, make sure you have the following:
 * Basic familiarity with JavaScript and Express.js.
 
 ## Architecture Overview
-
-
 
 The application uses PostgreSQL to store user data and Redis to cache frequently requested data. As requests pass through the application, OpenTelemetry automatically captures telemetry data and sends it to SigNoz, where you can visualize request traces, database queries, and cache operations.
 
@@ -61,7 +59,7 @@ The application uses PostgreSQL to store user data and Redis to cache frequently
              └────────────┘`}</code>
 </pre>
 
-## Step 1: Install SigNoz App
+## Step 1: Install SigNoz
 
 Before instrumenting the Express.js application, you need an observability backend to collect, store, and visualize telemetry data. In this step, you'll deploy SigNoz using the `foundryctl` CLI and verify that it's ready to receive traces from your application.
 
@@ -189,3 +187,86 @@ Create a simple Express.js application that you'll instrument throughout this tu
     ```
 
     Replace `<SERVER-IP>` with your server's IP address. If the application is running successfully, you're ready to instrument it with OpenTelemetry in the next step.
+
+
+## Step 3: Instrument the Express.js Application with OpenTelemetry
+
+With the Express.js application running, the next step is to instrument it with OpenTelemetry. OpenTelemetry automatically captures telemetry data such as incoming HTTP requests and exports it to an observability backend for analysis. In this step, you'll configure the OpenTelemetry SDK and export traces to SigNoz using the OpenTelemetry Protocol (OTLP).
+
+1. Install the required OpenTelemetry packages.
+
+    ```bash
+    npm install \
+    @opentelemetry/api \
+    @opentelemetry/sdk-node \
+    @opentelemetry/auto-instrumentations-node \
+    @opentelemetry/resources \
+    @opentelemetry/semantic-conventions \
+    @opentelemetry/exporter-trace-otlp-grpc
+    ```
+
+    These packages install the OpenTelemetry SDK, enable automatic instrumentation for supported Node.js libraries, and configure the OTLP exporter used to send traces to SigNoz.
+
+2. Update the `.env` file with the following configuration.
+
+    ```env
+    PORT=3000
+
+    OTEL_SERVICE_NAME=express-observability-demo
+    OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+    ```
+
+    The `OTEL_SERVICE_NAME` identifies your application in SigNoz, while `OTEL_EXPORTER_OTLP_ENDPOINT` specifies the OpenTelemetry Collector endpoint that receives telemetry data.
+
+3. Create a file named `src/telemetry/instrumentation.js` with the following configuration.
+
+    ```javascript
+    // instrumentation.js code
+    ```
+
+    This configuration initializes the OpenTelemetry SDK, enables automatic instrumentation, and exports traces to the SigNoz OpenTelemetry Collector.
+
+4. Update `src/server.js` to initialize OpenTelemetry before loading the Express application.
+
+    ```javascript
+    // server.js code
+    ```
+
+    Loading the instrumentation before the application starts ensures that OpenTelemetry can automatically instrument supported libraries such as Express.
+
+5. Start the application.
+
+    ```bash
+    npm run dev
+    ```
+
+    If the application starts successfully, you should see output similar to the following.
+
+    ```text
+    Server running on port 3000
+    ```
+
+6. Generate application traffic by opening the application in your browser or by sending a request using `curl`.
+
+    ```bash
+    curl http://<SERVER-IP>:3000
+    ```
+
+    Replace `<SERVER-IP>` with your server's IP address.
+
+7. Open the SigNoz dashboard.
+
+    ```text
+    http://<SERVER-IP>:8080
+    ```
+
+    From the left navigation menu, open **Explorer** and verify that traces from the `express-observability-demo` service are being collected.
+
+    Verify that:
+
+    * The service name is **express-observability-demo**.
+    * HTTP request traces are displayed.
+    * Multiple spans are recorded for each request.
+    * The request completed successfully.
+
+8. After verifying the traces, your Express.js application is successfully instrumented with OpenTelemetry and ready for the next step, where you'll integrate PostgreSQL and observe database queries in SigNoz.
