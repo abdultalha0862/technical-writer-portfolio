@@ -1,0 +1,703 @@
+---
+sidebar_label: Instrument Node.js Express App with OpenTelemetry and SigNoz
+sidebar_position: 3
+title: Instrument Node.js Express App with OpenTelemetry and SigNoz
+---
+# Instrument a Node.js Express Application with OpenTelemetry and SigNoz: A Complete Guide
+
+Modern Node.js applications often use databases, caches, and other services to process requests. When an application becomes slow or encounters errors, logs alone rarely provide enough information to identify the root cause. OpenTelemetry provides a standard way to collect telemetry data, while SigNoz is an open-source observability platform that helps you collect, visualize, and analyze distributed traces. Together, they make it easier to understand application behavior, monitor performance, and troubleshoot issues.
+
+In this tutorial, you'll build an Express.js application instrumented with OpenTelemetry and export traces to SigNoz. You'll integrate PostgreSQL for data storage and Redis for caching, then use SigNoz to visualize HTTP requests, database queries, and cache operations. By the end of this guide, you'll have a complete observability pipeline for monitoring and troubleshooting your Node.js application.
+
+:::note
+
+This article was tested on a live server before publication. Every command, configuration file, and verification step was validated on the final deployment to maintain accuracy.
+
+:::
+
+## Prerequisites
+
+Before you begin, make sure you have the following:
+
+* An Ubuntu 24.04 server with at least 4 vCPUs and 8 GB RAM.
+* Node.js 20 or later installed.
+* Docker Engine and the Docker Compose plugin installed.
+* Basic familiarity with JavaScript and Express.js.
+
+## Architecture Overview
+
+The application uses PostgreSQL to store user data and Redis to cache frequently requested data. As requests pass through the application, OpenTelemetry automatically captures telemetry data and sends it to SigNoz, where you can visualize request traces, database queries, and cache operations.
+
+
+<pre style={{width: '100%', textAlign: 'center', overflowX: 'auto', background: 'var(--ifm-pre-background)', padding: 'var(--ifm-pre-padding)', borderRadius: 'var(--ifm-code-border-radius)', lineHeight: 1.3}}>
+  <code style={{display: 'inline-block', textAlign: 'left', background: 'transparent', padding: 0}}>{`              HTTP Request
+                    │
+                    ▼
+           ┌────────────────┐
+           │ Express.js App │
+           └────────┬───────┘
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+   PostgreSQL              Redis Cache
+        │                       │
+        └───────────┬───────────┘
+                    │
+            OpenTelemetry SDK
+                    │
+            OTLP (gRPC:4317)
+                    │
+                    ▼
+       ┌─────────────────────────┐
+       │ OpenTelemetry Collector │
+       │    (SigNoz Collector)   │
+       └────────────┬────────────┘
+                    ▼
+             ┌────────────┐
+             │   SigNoz   │
+             │ Dashboard  │
+             └────────────┘`}</code>
+</pre>
+
+## Step 1: Install SigNoz
+
+Before instrumenting the Express.js application, you need an observability backend to collect, store, and visualize telemetry data. In this step, you'll deploy SigNoz using the `foundryctl` CLI and verify that it's ready to receive traces from your application.
+
+1. Install the Foundry CLI and add it to your current shell's `PATH`.
+
+    ```bash
+    curl -fsSL https://signoz.io/foundry.sh | bash
+    export PATH="/root/.local/bin:$PATH"
+    ```
+
+2. Verify that the installation completed successfully.
+
+    ```bash
+    foundryctl version
+    ```
+
+3. Create a file named `casting.yaml` with the following configuration.
+
+    ```yaml
+    apiVersion: v1alpha1
+    kind: Installation
+
+    metadata:
+      name: signoz
+
+    spec:
+      deployment:
+        flavor: compose
+        mode: docker
+    ```
+
+    This configuration instructs `foundryctl` to deploy SigNoz using Docker Compose.
+
+4. Deploy SigNoz using the installation configuration.
+
+    ```bash
+    foundryctl cast -f casting.yaml
+    ```
+
+    The installer validates your Docker environment, generates the required Docker Compose resources, and starts the SigNoz services.
+
+5. Verify that the deployment completed successfully.
+
+    ```bash
+    docker ps
+    ```
+
+    You should see containers such as `signoz-frontend`, `signoz-query-service`, `signoz-otel-collector`, and `clickhouse`.
+
+6. Open the SigNoz dashboard in your browser.
+
+    ```text
+    http://<SERVER-IP>:8080
+    ```
+
+    Replace `<SERVER-IP>` with your server's IP address. If the installation completed successfully, the SigNoz setup page should load. Create the initial administrator account to access the dashboard.
+
+    ![SigNoz setup page for creating the initial administrator account](/image%20copy%2015.png)
+
+## Step 2: Create the Express.js Application
+
+Create a simple Express.js application that you'll instrument throughout this tutorial. You'll initialize a new Node.js project, install the required dependencies, and create a basic application that serves as the foundation for the remaining steps.
+
+1. Create a project directory and navigate into it.
+
+    ```bash
+    mkdir express-observability
+    cd express-observability
+    ```
+
+2. Initialize a new Node.js project.
+
+    ```bash
+    npm init -y
+    ```
+
+3. Install the application dependencies.
+
+    ```bash
+    npm install express helmet cors morgan dotenv pg redis
+    ```
+
+4. Install the development dependency.
+
+    ```bash
+    npm install --save-dev nodemon
+    ```
+
+5. Create the project structure.
+
+    ```bash
+    mkdir -p src/{controllers,routes,db,cache,telemetry}
+
+    touch src/app.js
+    touch src/server.js
+    touch .env
+    ```
+
+6. Verify that the project structure was created successfully.
+
+    ```bash
+    tree -L 2 -I node_modules
+    ```
+
+    If the `tree` command is not installed, install it using:
+
+    ```bash
+    sudo apt install tree -y
+    ```
+
+    You should see output similar to the following.
+
+    ```text
+    express-observability/
+    ├── node_modules/
+    ├── package-lock.json
+    ├── package.json
+    ├── .env
+    └── src/
+        ├── app.js
+        ├── server.js
+        ├── cache/
+        ├── controllers/
+        ├── db/
+        ├── routes/
+        └── telemetry/
+    ```
+
+7. Update a `.env` file with the following configuration.
+
+    ```env
+    PORT=3000
+
+    OTEL_SERVICE_NAME=express-observability-demo
+    OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+
+    DB_HOST=localhost
+    DB_PORT=5432
+    DB_NAME=observability
+    DB_USER=postgres
+    DB_PASSWORD=postgres
+
+    REDIS_HOST=localhost
+    REDIS_PORT=6379
+    ```
+
+The Express.js project structure is now ready. In the next step, you'll instrument the application with OpenTelemetry and configure it to export traces to SigNoz.
+
+## Step 3: Instrument the Express.js Application with OpenTelemetry
+
+With the Express.js application running, the next step is to instrument it with OpenTelemetry. OpenTelemetry automatically captures telemetry data such as incoming HTTP requests and exports it to an observability backend for analysis. In this step, you'll configure the OpenTelemetry SDK and export traces to SigNoz using the OpenTelemetry Protocol (OTLP).
+
+1. Install the required OpenTelemetry packages.
+
+    ```bash
+    npm install \
+    @opentelemetry/api \
+    @opentelemetry/sdk-node \
+    @opentelemetry/auto-instrumentations-node \
+    @opentelemetry/resources \
+    @opentelemetry/semantic-conventions \
+    @opentelemetry/exporter-trace-otlp-grpc
+    ```
+
+    These packages install the OpenTelemetry SDK, enable automatic instrumentation for supported Node.js libraries, and configure the OTLP exporter used to send traces to SigNoz.
+
+3. Create a file named `src/telemetry/instrumentation.js` with the following configuration.
+
+    ```javascript
+    const { NodeSDK } = require("@opentelemetry/sdk-node");
+    const { getNodeAutoInstrumentations } = require("@opentelemetry/auto-instrumentations-node");
+    const { OTLPTraceExporter } = require("@opentelemetry/exporter-trace-otlp-grpc");
+
+    const sdk = new NodeSDK({
+      traceExporter: new OTLPTraceExporter(),
+      instrumentations: [getNodeAutoInstrumentations()],
+    });
+
+    sdk.start();
+
+    process.on("SIGTERM", () => {
+    sdk.shutdown()
+        .then(() => console.log("OpenTelemetry terminated"))
+        .catch((error) => console.error("Error terminating OpenTelemetry", error))
+        .finally(() => process.exit(0));
+    });
+    ```
+
+    This configuration initializes the OpenTelemetry SDK, enables automatic instrumentation, and exports traces to the SigNoz OpenTelemetry Collector.
+4. Create a file named `src/app.js` with the following configuration.
+
+    ```javascript
+    const express = require("express");
+    const helmet = require("helmet");
+    const cors = require("cors");
+    const morgan = require("morgan");
+
+    const app = express();
+
+    app.use(helmet());
+    app.use(cors());
+    app.use(express.json());
+    app.use(morgan("dev"));
+
+    app.get("/", (req, res) => {
+      res.send("Express Observability Demo");
+    });
+
+    module.exports = app;
+    ```
+
+    This file creates the Express application, configures common middleware, defines a sample route, and exports the application so it can be started by the server.
+5. Update the `scripts` section in the `package.json` file.
+
+    ```json
+    "scripts": {
+      "test": "echo \"Error: no test specified\" && exit 1",
+      "dev": "nodemon src/server.js"
+    }
+    ```
+
+6. Create a file named `src/server.js` to initialize OpenTelemetry before loading the Express application.
+
+    ```javascript
+    require("dotenv").config();
+    require("./telemetry/instrumentation");
+
+    const app = require("./app");
+
+    const PORT = process.env.PORT || 3000;
+
+    app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    });
+    ```
+
+    Loading the instrumentation before the application starts ensures that OpenTelemetry can automatically instrument supported libraries such as Express.
+
+7. Start the application.
+
+    ```bash
+    npm run dev
+    ```
+
+    If the application starts successfully, you should see output similar to the following.
+
+    ```text
+    Server running on port 3000
+    ```
+
+    Keep the development server running while completing the remaining steps. Open a new terminal session, navigate to the `express-observability` project directory, and run the remaining commands from there.
+
+
+8. Generate application traffic by opening the application in your browser or by sending a request using `curl`.
+
+    ```bash
+    curl http://<SERVER-IP>:3000
+    ```
+
+    Replace `<SERVER-IP>` with your server's IP address.
+
+8. Open the SigNoz dashboard.
+
+    ```text
+    http://<SERVER-IP>:8080
+    ```
+
+    From the left navigation menu, open **Explorer** and verify that traces from the `express-observability-demo` service are being collected.
+
+    Verify that:
+
+    * The service name is **express-observability-demo**.
+    * HTTP request traces are displayed.
+    * Multiple spans are recorded for each request.
+    * The request completed successfully.
+
+    ![Traces from the express-observability-demo service in the SigNoz Explorer](/image%20copy%2016.png)
+
+## Step 4: Deploy PostgreSQL and Redis
+
+With the Express.js application instrumented, the next step is to deploy PostgreSQL and Redis. PostgreSQL stores the application data, while Redis caches frequently requested responses to improve performance. In this step, you'll deploy both services, configure the application to connect to them, and prepare the infrastructure for the next step.
+
+1. Create a `docker-compose.yml` file with the following configuration.
+
+    ```yaml
+    services:
+      postgres:
+        image: postgres:17
+        container_name: postgres
+        restart: unless-stopped
+
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: observability
+
+        ports:
+          - "5432:5432"
+
+        volumes:
+          - postgres-data:/var/lib/postgresql/data
+
+        healthcheck:
+          test: ["CMD-SHELL", "pg_isready -U postgres -d observability"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+      redis:
+        image: redis:7-alpine
+        container_name: redis
+        restart: unless-stopped
+
+        ports:
+          - "6379:6379"
+
+        healthcheck:
+          test: ["CMD", "redis-cli", "ping"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+    volumes:
+      postgres-data:
+    ```
+
+2. Start the PostgreSQL and Redis containers.
+
+    ```bash
+    docker compose up -d
+    ```
+
+3. Verify that both containers are running.
+
+    ```bash
+    docker ps
+    ```
+
+    You should see both the `postgres` and `redis` containers in the **Up** state.
+
+4. Connect to the PostgreSQL database.
+
+    ```bash
+    docker exec -it postgres psql -U postgres -d observability
+    ```
+
+5. Create a sample `users` table.
+
+    ```sql
+    CREATE TABLE users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100),
+        email VARCHAR(255) UNIQUE
+    );
+    ```
+
+6. Insert sample records.
+
+    ```sql
+    INSERT INTO users (name, email)
+    VALUES
+    ('Alice', 'alice@example.com'),
+    ('Bob', 'bob@example.com'),
+    ('Charlie', 'charlie@example.com');
+    ```
+
+7. Exit the PostgreSQL shell.
+
+    ```text
+    \q
+    ```
+
+8. Create a PostgreSQL connection file named `src/db/postgres.js`.
+
+    ```javascript
+    const { Pool } = require("pg");
+
+    const pool = new Pool({
+      host: process.env.DB_HOST,
+      port: process.env.DB_PORT,
+      database: process.env.DB_NAME,
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+    });
+
+    pool.on("connect", () => {
+      console.log("Connected to PostgreSQL");
+    });
+
+    pool.on("error", (error) => {
+      console.error("Unexpected PostgreSQL error:", error);
+      process.exit(1);
+    });
+
+    module.exports = pool;
+    ```
+
+    This file creates a PostgreSQL connection pool that the application uses to execute database queries.
+
+9. Create a Redis client file named `src/cache/redis.js`.
+
+    ```javascript
+    const { createClient } = require("redis");
+    const client = createClient({
+    url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`,
+    });
+
+    client.on("connect", () => {
+    console.log("Connected to Redis");
+    });
+
+    client.on("error", (error) => {
+    console.error("Redis Client Error:", error);
+    });
+
+    (async () => {
+    await client.connect();
+    })();
+
+    module.exports = client;
+    ```
+
+    This file initializes the Redis client and establishes a connection to the Redis server.
+
+After completing this step, both PostgreSQL and Redis are running and connected to the Express.js application.
+
+## Step 5: Build a Cached `/users` API
+
+With PostgreSQL and Redis configured, the next step is to build a `/users` endpoint. You'll first retrieve data from PostgreSQL and then add Redis caching to improve response times. Finally, you'll verify the generated traces in SigNoz.
+
+1. Create the `src/controllers/userController.js` file to retrieve users from PostgreSQL.
+
+    ```javascript
+    const pool = require("../db/postgres");
+
+    async function getUsers(req, res) {
+      try {
+        const { rows } = await pool.query(
+          "SELECT id, name, email FROM users ORDER BY id;"
+        );
+
+        res.status(200).json(rows);
+      } catch (error) {
+        console.error("Error retrieving users:", error);
+
+        res.status(500).json({
+          message: "Failed to retrieve users.",
+        });
+      }
+    }
+
+    module.exports = {
+      getUsers,
+    };
+    ```
+
+    This controller retrieves all users from PostgreSQL and returns them as JSON. OpenTelemetry automatically captures the PostgreSQL query without requiring any additional tracing code.
+
+2. Create a file named `src/routes/userRoutes.js`.
+
+    ```javascript
+    const express = require("express");
+    const { getUsers } = require("../controllers/userController");
+
+    const router = express.Router();
+
+    router.get("/users", getUsers);
+
+    module.exports = router;
+    ```
+
+3. Update the `src/app.js` file to register the `/users` routes.
+
+    ```javascript
+    const express = require("express");
+    const helmet = require("helmet");
+    const cors = require("cors");
+    const morgan = require("morgan");
+
+    const userRoutes = require("./routes/userRoutes");
+
+    const app = express();
+
+    app.use(helmet());
+    app.use(cors());
+    app.use(express.json());
+    app.use(morgan("dev"));
+
+    app.use(userRoutes);
+
+    app.get("/", (req, res) => {
+      res.send("Express Observability Demo");
+    });
+
+    module.exports = app;
+    ```
+
+4. Start the application.
+
+    ```bash
+    npm run dev
+    ```
+
+5. Generate application traffic by sending a request to the `/users` endpoint.
+
+    ```bash
+    curl http://<SERVER-IP>:3000/users
+    ```
+
+    Verify that the endpoint returns the list of users from PostgreSQL.
+
+6. Update the `src/controllers/userController.js` file to cache responses in Redis before querying PostgreSQL.
+
+    ```javascript
+    const pool = require("../db/postgres");
+    const redis = require("../cache/redis");
+
+    async function getUsers(req, res) {
+      try {
+        const cachedUsers = await redis.get("users");
+
+        if (cachedUsers) {
+          return res.json({
+            source: "redis",
+            data: JSON.parse(cachedUsers),
+          });
+        }
+
+        const { rows } = await pool.query(
+          "SELECT id, name, email FROM users ORDER BY id;"
+        );
+
+        await redis.set("users", JSON.stringify(rows));
+
+        res.json({
+          source: "postgres",
+          data: rows,
+        });
+      } catch (error) {
+        console.error("Error retrieving users:", error);
+
+        res.status(500).json({
+          message: "Failed to retrieve users.",
+        });
+      }
+    }
+
+    module.exports = {
+      getUsers,
+    };
+    ```
+
+    This controller first checks Redis for cached data. If the data exists, it returns the cached response immediately. Otherwise, it queries PostgreSQL, stores the result in Redis, and returns the response.
+
+7. Send two requests to the `/users` endpoint.
+
+    ```bash
+    curl http://<SERVER-IP>:3000/users
+    ```
+
+    The first request retrieves data from PostgreSQL and stores it in Redis.
+
+    Send the request again.
+
+    ```bash
+    curl http://<SERVER-IP>:3000/users
+    ```
+
+    The second request returns the cached response directly from Redis.
+
+8. Open the SigNoz dashboard and navigate to **Explorer**. Select a trace generated by the `/users` endpoint.
+
+    Verify that:
+
+    - The first request returns data from PostgreSQL.
+    - The second request returns data from Redis.
+    - A PostgreSQL query span is generated for the first request.
+    - Redis GET and SET spans are visible in the trace.
+    - The second request no longer includes a PostgreSQL query span because the response is served from the cache.
+
+    ![PostgreSQL and Redis spans for the /users endpoint in a SigNoz trace](/image%20copy%2017.png)
+
+After completing this step, your Express.js application exports HTTP, PostgreSQL, and Redis traces to SigNoz, providing complete visibility into the request lifecycle.
+
+
+
+## Troubleshooting Common Issues
+
+
+1. After starting the application, traces were exported successfully, but the service appeared as `unknown_service:node` instead of the configured service name.
+
+    **Cause:** An older OpenTelemetry exporter package was installed together with a newer OpenTelemetry SDK, causing the service name configuration to be ignored.
+
+    **Fix:** Remove the old exporter package and install the latest OTLP gRPC trace exporter.
+
+    ```bash
+    npm uninstall @opentelemetry/exporter-otlp-grpc
+
+    npm install @opentelemetry/exporter-trace-otlp-grpc
+    ```
+
+    After restarting the application, the service appeared correctly as `express-observability-demo` in SigNoz.
+
+
+
+
+2. After instrumenting the application, no traces appeared in the SigNoz dashboard.
+
+    **Cause:** The OpenTelemetry SDK was initialized after the Express application was loaded, preventing automatic instrumentation from patching the required libraries.
+
+    **Fix:** Load the instrumentation file before importing any other application modules.
+
+    ```javascript
+    require('./telemetry/instrumentation');
+    ```
+
+    This statement should be the first line in `src/server.js`.
+
+
+
+3. HTTP request traces appeared in SigNoz, but PostgreSQL or Redis spans were not visible.
+
+    **Cause:** The corresponding service was either not running or the application was unable to establish a connection.
+
+    **Fix:** Verify that both containers are running.
+
+    ```bash
+    docker ps
+    ```
+
+    Also verify that the PostgreSQL and Redis connection settings in the `.env` file match your Docker Compose configuration.
+
+## Conclusion
+
+You've successfully instrumented an Express.js application with OpenTelemetry and configured it to export traces to SigNoz. Along the way, you integrated PostgreSQL for data storage and Redis for caching, allowing you to observe HTTP requests, database queries, and cache operations from a single dashboard.
+
+With this observability pipeline in place, you can better understand how requests flow through your application, identify performance bottlenecks, and troubleshoot issues more efficiently. To continue exploring application observability, check out the following resources:
+
+* **OpenTelemetry Documentation:** https://opentelemetry.io/docs/
+* **SigNoz Documentation:** https://signoz.io/docs/introduction/
+* **Node.js Instrumentation Guide:** https://opentelemetry.io/docs/languages/js/

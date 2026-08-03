@@ -90,6 +90,7 @@ const sidebars: SidebarsConfig = {
       },
       items: [
         'observability/bookstack-signoz',
+        'observability/nodejs-express-signoz',
       ],
     },
   ],
