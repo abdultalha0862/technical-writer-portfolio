@@ -117,6 +117,8 @@ Before instrumenting the Express.js application, you need an observability backe
 
     Replace `<SERVER-IP>` with your server's IP address. If the installation completed successfully, the SigNoz setup page should load. Create the initial administrator account to access the dashboard.
 
+    ![SigNoz setup page for creating the initial administrator account](/image%20copy%2015.png)
+
 ## Step 2: Create the Express.js Application
 
 Create a simple Express.js application that you'll instrument throughout this tutorial. You'll initialize a new Node.js project, install the required dependencies, and create a basic application that serves as the foundation for the remaining steps.
@@ -186,7 +188,7 @@ Create a simple Express.js application that you'll instrument throughout this tu
         └── telemetry/
     ```
 
-7. Create a `.env` file with the following configuration.
+7. Update a `.env` file with the following configuration.
 
     ```env
     PORT=3000
@@ -254,18 +256,16 @@ With the Express.js application running, the next step is to instrument it with 
     const helmet = require("helmet");
     const cors = require("cors");
     const morgan = require("morgan");
+
     const app = express();
-    const userRoutes = require("./routes/userRoutes");
 
     app.use(helmet());
     app.use(cors());
     app.use(express.json());
     app.use(morgan("dev"));
 
-    app.use(userRoutes);
-
     app.get("/", (req, res) => {
-    res.send("Express Observability Demo");
+      res.send("Express Observability Demo");
     });
 
     module.exports = app;
@@ -332,6 +332,8 @@ With the Express.js application running, the next step is to instrument it with 
     * HTTP request traces are displayed.
     * Multiple spans are recorded for each request.
     * The request completed successfully.
+
+    ![Traces from the express-observability-demo service in the SigNoz Explorer](/image%20copy%2016.png)
 
 ## Step 4: Deploy PostgreSQL and Redis
 
@@ -485,7 +487,7 @@ After completing this step, both PostgreSQL and Redis are running and connected 
 
 With PostgreSQL and Redis configured, the next step is to build a `/users` endpoint. You'll first retrieve data from PostgreSQL and then add Redis caching to improve response times. Finally, you'll verify the generated traces in SigNoz.
 
-1. Update the `src/controllers/userController.js` file to retrieve users from PostgreSQL.
+1. Create the `src/controllers/userController.js` file to retrieve users from PostgreSQL.
 
     ```javascript
     const pool = require("../db/postgres");
@@ -526,7 +528,31 @@ With PostgreSQL and Redis configured, the next step is to build a `/users` endpo
     module.exports = router;
     ```
 
+3. Update the `src/app.js` file to register the `/users` routes.
 
+    ```javascript
+    const express = require("express");
+    const helmet = require("helmet");
+    const cors = require("cors");
+    const morgan = require("morgan");
+
+    const userRoutes = require("./routes/userRoutes");
+
+    const app = express();
+
+    app.use(helmet());
+    app.use(cors());
+    app.use(express.json());
+    app.use(morgan("dev"));
+
+    app.use(userRoutes);
+
+    app.get("/", (req, res) => {
+      res.send("Express Observability Demo");
+    });
+
+    module.exports = app;
+    ```
 
 4. Start the application.
 
@@ -610,6 +636,8 @@ With PostgreSQL and Redis configured, the next step is to build a `/users` endpo
     - A PostgreSQL query span is generated for the first request.
     - Redis GET and SET spans are visible in the trace.
     - The second request no longer includes a PostgreSQL query span because the response is served from the cache.
+
+    ![PostgreSQL and Redis spans for the /users endpoint in a SigNoz trace](/image%20copy%2017.png)
 
 After completing this step, your Express.js application exports HTTP, PostgreSQL, and Redis traces to SigNoz, providing complete visibility into the request lifecycle.
 
