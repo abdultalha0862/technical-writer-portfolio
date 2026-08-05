@@ -16,7 +16,7 @@ export default function Home(): ReactNode {
   return (
     <Layout
       title={siteConfig.title}
-      description="Documentation-first portfolio homepage with reusable React sections">
+      description="Production-ready DevOps documentation for deploying self-hosted open-source software.">
       <main className={styles.page}>
         <Hero />
         <Mission />
