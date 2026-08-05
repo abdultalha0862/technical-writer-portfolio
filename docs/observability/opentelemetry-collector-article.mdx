@@ -189,3 +189,86 @@ With SigNoz running, the next step is to create a simple Express.js application 
 
 The sample application is now ready. In the next step, you'll instrument the application with OpenTelemetry and configure it to export telemetry to the OpenTelemetry Collector.
 
+## Step 3: Set Up the OpenTelemetry Sample Application
+
+With the project structure in place, the next step is to prepare the sample application for OpenTelemetry instrumentation. In this step, you'll install the required OpenTelemetry packages, create the instrumentation directory, and build a simple Express.js application that will generate telemetry data for the OpenTelemetry Collector.
+
+1. Install the required OpenTelemetry packages.
+
+    ```bash
+    npm install \
+    @opentelemetry/api \
+    @opentelemetry/sdk-node \
+    @opentelemetry/auto-instrumentations-node \
+    @opentelemetry/resources \
+    @opentelemetry/semantic-conventions \
+    @opentelemetry/exporter-trace-otlp-grpc \
+    @opentelemetry/exporter-metrics-otlp-grpc
+    ```
+
+2. Create a directory for the OpenTelemetry instrumentation.
+
+    ```bash
+    mkdir src/telemetry
+    touch src/telemetry/instrumentation.js
+    ```
+
+3. Create a simple Express application in `src/app.js`.
+
+    ```javascript
+    const express = require("express");
+
+    const app = express();
+
+    app.get("/", (req, res) => {
+    res.json({
+        message: "Hello from OpenTelemetry Collector Pipeline!",
+    });
+    });
+
+    module.exports = app;
+    ```
+
+4. Create the application entry point in `src/server.js`.
+
+    ```javascript
+    const app = require("./app");
+
+    const PORT = process.env.PORT || 3000;
+
+    app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    });
+    ```
+
+5. Update the `scripts` section of your `package.json`.
+
+    ```json
+    "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+    }
+    ```
+
+6. Start the application.
+
+    ```bash
+    npm run dev
+    ```
+
+7. Open a new terminal and naviagte into project repo and verify that the application is running.
+
+    ```bash
+    curl http://localhost:3000
+    ```
+
+    You should receive the following response.
+
+    ```json
+    {
+    "message": "Hello from OpenTelemetry Collector Pipeline!"
+    }
+    ```
+
+At this point, the sample application is running successfully and is ready to be instrumented with OpenTelemetry. In the next step, you'll configure the OpenTelemetry SDK and export telemetry to the OpenTelemetry Collector.
+
