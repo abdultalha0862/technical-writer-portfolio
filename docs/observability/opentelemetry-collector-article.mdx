@@ -272,3 +272,73 @@ With the project structure in place, the next step is to prepare the sample appl
 
 At this point, the sample application is running successfully and is ready to be instrumented with OpenTelemetry. In the next step, you'll configure the OpenTelemetry SDK and export telemetry to the OpenTelemetry Collector.
 
+## Step 4: Instrument the Application with OpenTelemetry
+
+With the sample application running, the next step is to instrument it with OpenTelemetry. You'll configure the OpenTelemetry SDK, enable automatic instrumentation, and export traces to the OpenTelemetry Collector. The SDK must be initialized before the Express application starts so that it can automatically instrument supported libraries.
+
+1. Create the OpenTelemetry instrumentation file at `src/telemetry/instrumentation.js`.
+
+    ```javascript
+    const { NodeSDK } = require("@opentelemetry/sdk-node");
+    const { OTLPTraceExporter } = require("@opentelemetry/exporter-trace-otlp-grpc");
+    const {
+    getNodeAutoInstrumentations,
+    } = require("@opentelemetry/auto-instrumentations-node");
+
+    const traceExporter = new OTLPTraceExporter({
+    url: "http://localhost:4317",
+    });
+
+    const sdk = new NodeSDK({
+    traceExporter,
+    instrumentations: [
+        getNodeAutoInstrumentations(),
+    ],
+    });
+
+    sdk.start();
+
+    process.on("SIGTERM", async () => {
+    await sdk.shutdown();
+    console.log("OpenTelemetry SDK shut down successfully.");
+    });
+    ```
+
+2. Update `src/server.js` to initialize the OpenTelemetry SDK before loading the Express application.
+
+    ```javascript
+    require("./telemetry/instrumentation");
+
+    const app = require("./app");
+
+    const PORT = process.env.PORT || 3000;
+
+    app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    });
+    ```
+
+3. Start the application.
+
+    ```bash
+    npm run dev
+    ```
+
+4. Open a new terminal and generate a few requests to the application.
+
+    ```bash
+    curl http://localhost:3000
+    curl http://localhost:3000
+    curl http://localhost:3000
+    ```
+
+    Each request should return the following response.
+
+    ```json
+    {
+    "message": "Hello from OpenTelemetry Collector Pipeline!"
+    }
+    ```
+
+At this point, the Express application is instrumented with OpenTelemetry and is exporting trace data to the OpenTelemetry Collector. In the next step, you'll verify that the telemetry is successfully received by the Collector and visualize the traces in the SigNoz dashboard.
+
