@@ -4,6 +4,8 @@ sidebar_position: 6
 title: How to Back Up and Restore Docmost with Docker Compose and PostgreSQL
 ---
 
+import InfrastructureUsed from '@site/src/components/InfrastructureUsed';
+
 # How to Back Up and Restore Docmost with Docker Compose and PostgreSQL
 
 ## Introduction
@@ -27,6 +29,8 @@ Before you begin, make sure you have the following:
 - **The PostgreSQL Client**: `pg_dump`, `pg_restore`, and `psql` installed on the server. The client version should match or be compatible with your PostgreSQL server version.
 
 - **Existing Data in Docmost**: At least one workspace with pages and uploaded files, so you can confirm that the backup and restore process works correctly.
+
+<InfrastructureUsed />
 
 ## Step 1: Create Create the Project Directory
 
