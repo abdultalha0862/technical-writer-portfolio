@@ -284,12 +284,25 @@ With the sample application running, the next step is to instrument it with Open
     const {
     getNodeAutoInstrumentations,
     } = require("@opentelemetry/auto-instrumentations-node");
+    const { resourceFromAttributes } = require("@opentelemetry/resources");
+    const {
+    ATTR_SERVICE_NAME,
+    ATTR_SERVICE_VERSION,
+    ATTR_DEPLOYMENT_ENVIRONMENT,
+    } = require("@opentelemetry/semantic-conventions");
 
     const traceExporter = new OTLPTraceExporter({
     url: "http://localhost:4317",
     });
 
+    const resource = resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: "otel-collector-pipeline",
+    [ATTR_SERVICE_VERSION]: "1.0.0",
+    [ATTR_DEPLOYMENT_ENVIRONMENT]: "development",
+    });
+
     const sdk = new NodeSDK({
+    resource,
     traceExporter,
     instrumentations: [
         getNodeAutoInstrumentations(),
@@ -340,5 +353,104 @@ With the sample application running, the next step is to instrument it with Open
     }
     ```
 
-At this point, the Express application is instrumented with OpenTelemetry and is exporting trace data to the OpenTelemetry Collector. In the next step, you'll verify that the telemetry is successfully received by the Collector and visualize the traces in the SigNoz dashboard.
+5. Open the SigNoz dashboard by visiting `http://<SERVER-IP>:8080`. From the left navigation menu, select **Explorer** and verify that traces from the `otel-collector-pipeline` service are displayed.
 
+
+At this point, you've successfully built a working OpenTelemetry Collector pipeline. Before concluding, it's helpful to understand how the Collector processes telemetry and forwards it to SigNoz.
+
+## Step 5: Understand the OpenTelemetry Collector Pipeline
+
+In this article, you used the OpenTelemetry Collector as an intermediary between your application and SigNoz. Instead of sending telemetry directly to the observability platform, the application exports telemetry to the Collector, which receives, processes, and forwards it to the appropriate backend. This architecture provides a centralized and vendor-neutral way to collect telemetry from multiple applications.
+
+The following diagram illustrates the telemetry flow built in this tutorial.
+
+```text
+                                    Express Application
+                                            │
+                                            ▼
+                                    OpenTelemetry SDK
+                                            │
+                                            ▼
+                                    OTLP Trace Exporter
+                                            │
+                                            ▼
+                                    OpenTelemetry Collector
+                                            │
+                                    ┌─────────────┐
+                                    │ Receiver    │
+                                    │ Processor   │
+                                    │ Exporter    │
+                                    └─────────────┘
+                                            │
+                                            ▼
+                                       ClickHouse
+                                            │
+                                            ▼
+                                    SigNoz Dashboard
+```
+
+The OpenTelemetry Collector configuration is organized into four main components: **receivers**, **processors**, **exporters**, and **pipelines**.
+
+### Receivers
+
+Receivers collect telemetry from applications and external systems. In this deployment, the Collector uses the OTLP receiver to accept telemetry over both gRPC and HTTP.
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+```
+
+The Express application configured in this tutorial exports traces to the OTLP gRPC endpoint on port `4317`, where the Collector receives the telemetry.
+
+### Processors
+
+Processors transform or optimize telemetry before it is exported. The `batch` processor groups telemetry into batches, reducing network overhead and improving export performance.
+
+```yaml
+processors:
+  batch:
+```
+
+Batching is a recommended practice for production deployments because it improves throughput and reduces the number of requests sent to the backend.
+
+### Exporters
+
+Exporters send processed telemetry to a storage backend or observability platform. In the SigNoz deployment, trace data is exported to ClickHouse.
+
+```yaml
+exporters:
+  clickhousetraces:
+```
+
+SigNoz stores trace data in ClickHouse and retrieves it to power the Explorer, Services, and Traces views.
+
+### Pipelines
+
+A pipeline connects receivers, processors, and exporters into a complete telemetry workflow. The trace pipeline used by SigNoz follows this flow:
+
+```yaml
+service:
+  pipelines:
+    traces:
+      receivers:
+        - otlp
+      processors:
+        - batch
+      exporters:
+        - clickhousetraces
+```
+
+When the Express application generates a trace, the Collector first receives it through the OTLP receiver, batches the telemetry using the batch processor, and then exports the processed trace to ClickHouse. SigNoz reads the stored telemetry from ClickHouse and displays it in the dashboard, allowing you to analyze requests, latency, and application performance.
+
+Understanding these core Collector components makes it easier to extend your observability pipeline as your applications grow. The same architecture can be used to collect telemetry from multiple services and route it to one or more observability backends without modifying your application code.
+
+## Conclusion
+
+In this tutorial, you built an OpenTelemetry Collector pipeline using Docker Compose and integrated it with SigNoz to collect and visualize application traces. You deployed SigNoz, instrumented a sample Express.js application with the OpenTelemetry SDK, exported telemetry to the OpenTelemetry Collector, and verified the collected traces in the SigNoz dashboard.
+
+You also learned how the OpenTelemetry Collector processes telemetry through receivers, processors, exporters, and pipelines before forwarding it to an observability backend. This architecture provides a flexible and vendor-neutral foundation that can be extended to collect telemetry from multiple applications as your observability needs grow.
