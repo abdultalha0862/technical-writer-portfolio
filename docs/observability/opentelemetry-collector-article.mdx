@@ -22,7 +22,7 @@ Before you begin, make sure you have the following:
 
 * An Ubuntu 24.04 server with at least 4 vCPUs and 8 GB RAM.
 * Docker Engine and the Docker Compose plugin installed.
-* Basic familiarity with Docker and Docker Compose.
+* Node.js 20 or later installed.
 * Basic understanding of OpenTelemetry concepts such as traces, metrics, and lo
 
 ## Architecture Overview
@@ -123,4 +123,69 @@ Before instrumenting the Express.js application, you need an observability backe
     Replace `<SERVER-IP>` with your server's IP address. If the installation completed successfully, the SigNoz setup page should load. Create the initial administrator account to access the dashboard.
 
     ![SigNoz setup page for creating the initial administrator account](/image%20copy%2015.png)
+
+## Step 2: Create the Sample Application
+
+With SigNoz running, the next step is to create a simple Express.js application that you'll use throughout this tutorial. The application serves as a telemetry source for the OpenTelemetry Collector. In this step, you'll initialize a new Node.js project, install the required dependencies, and create the basic project structure. You'll instrument the application with OpenTelemetry in the next step.
+
+1. Create a project directory and navigate into it. 
+    ```bash
+    mkdir otel-collector-pipeline
+    cd otel-collector-pipeline
+    ```
+
+2. Initialize a new Node.js project.
+
+    ```bash
+    npm init -y
+    ```
+
+3. Install the application dependency.
+
+    ```bash
+    npm install express
+    ```
+
+4. Install the development dependency.
+
+    ```bash
+    npm install --save-dev nodemon
+    ```
+
+5. Create the project structure.
+
+    ```bash
+    mkdir src
+
+    touch .env
+    touch src/app.js
+    touch src/server.js
+    ```
+
+6. Verify that the project structure was created successfully.
+
+    ```bash
+    tree -L 2 -I node_modules
+    ```
+
+    If the `tree` command is not installed, install it using:
+
+    ```bash
+    sudo apt update
+    sudo apt install tree -y
+    ```
+
+    You should see output similar to the following.
+
+    ```text
+    otel-collector-pipeline/
+    ├── package.json
+    ├── package-lock.json
+    ├── .env
+    └── src/
+        ├── app.js
+        └── server.js
+    ```
+
+The sample application is now ready. In the next step, you'll instrument the application with OpenTelemetry and configure it to export telemetry to the OpenTelemetry Collector.
 
