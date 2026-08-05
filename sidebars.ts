@@ -91,7 +91,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'observability/bookstack-signoz',
         'observability/nodejs-express-signoz',
-        'observability/opentelemetry-collector-article'
+        'observability/opentelemetry-collector-article',
       ],
     },
   ],
