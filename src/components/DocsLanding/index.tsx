@@ -24,7 +24,7 @@ const categories = [
     icon: '📊',
     title: 'Observability',
     description: 'Instrument, monitor, and troubleshoot systems with OpenTelemetry and SigNoz.',
-    count: '1 Guide',
+    count: '3 Guides',
     to: '/docs/observability',
   },
 ];
